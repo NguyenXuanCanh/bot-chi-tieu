@@ -360,7 +360,7 @@ Mục tiêu: "${goal.title}" — cần ${formatVnd(goal.target)} trước hết 
 Lương trung bình: ${formatVnd(income)}/tháng. => Tổng chi tối đa mỗi tháng: ${formatVnd(budgetLimit)}.
 ${profile.dataDays >= 30 ? `Chi tiêu trung bình mỗi tháng (từ ${profile.dataDays} ngày dữ liệu)` : `Chi tiêu tháng này tới giờ (mới ${profile.dataDays} ngày dữ liệu, chưa phải cả tháng; khoản cố định như tiền nhà là theo tháng)`}: tổng ${formatVnd(currentSpend)}.
 Khoản chi cố định hàng tháng (tự trừ mỗi tháng, đã nằm trong danh mục tương ứng, KHÔNG đề xuất cắt trừ khi thật sự bắt buộc): ${recurring.map((r) => `${r.item} ${formatVnd(r.amount)} (${r.category})`).join('; ') || 'không có'}.
-${creditDebt ? `Nợ thẻ tín dụng tháng này: ${formatVnd(creditDebt)} — CHƯA nằm trong số chi ở trên, sẽ tính thêm vào chi tiêu THÁNG SAU (chỉ một lần), nên tháng sau để dành được ít hơn.
+${creditDebt ? `Dư nợ trả sau tháng này (thẻ tín dụng, ví trả sau): ${formatVnd(creditDebt)} — CHƯA nằm trong số chi ở trên, sẽ tính thêm vào chi tiêu THÁNG SAU (chỉ một lần), nên tháng sau để dành được ít hơn.
 ` : ''}Hũ người dùng tự đặt mỗi tháng: ${JARS.map((j) => `${j.name} ${budgets[j.key] ? formatVnd(budgets[j.key]) : 'chưa đặt'}`).join(', ')}.
 ${profile.categories.map((c) => `- ${c.category} (hũ ${jarInfo(jarOfCategory(map, c.category)).name}): ${c.monthly} VND`).join('\n') || '- chưa có dữ liệu chi tiêu'}
 

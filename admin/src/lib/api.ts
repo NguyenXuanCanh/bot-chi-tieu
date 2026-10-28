@@ -168,7 +168,7 @@ export type Recurring = {
   last_month: string | null;
 };
 
-export type CreditCharge = { id: number; amount: number; item: string; category: string; spent_on: string; settled: number };
+export type CreditCharge = { id: number; amount: number; item: string; category: string; spent_on: string; settled: number; provider: string };
 
 export type Forecast = {
   balance: { snapshot: { id: number; amount: number; day: string; created_at: number }; incomeSince: number; spentSince: number; now: number };
@@ -189,7 +189,7 @@ export type DashboardData = {
   status: MonthStatus;
   forecast: Forecast | null;
   goal: (Omit<GoalProgress, 'months'> & { title: string; target: number; deadline: string }) | null;
-  credit: { total: number; count: number; billedMonth: string } | null;
+  credit: { total: number; count: number; billedMonth: string; byProvider: { key: string; name: string; total: number }[] } | null;
   upcoming: { id: number; item: string; amount: number; category: string; day: number }[];
   fixedTotal: number;
   history: { month: string; income: number; spent: number; saved: number | null }[];

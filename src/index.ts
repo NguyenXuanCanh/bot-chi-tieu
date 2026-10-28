@@ -38,6 +38,10 @@ import {
   jarInfo,
   matchCategory,
   matchDay,
+  matchPaylater,
+  PAYLATER,
+  paylaterInfo,
+  type PaylaterKey,
   monthOf,
   plain,
   parseAmount,
@@ -93,16 +97,16 @@ const HELP = `👋 Ghi chi tiêu bằng cách nhắn như bình thường:
 • <code>/muctieu 50tr tới tháng 2 năm sau để mua laptop</code> (hoặc <code>sau 6 tháng</code>, thêm <code>đã có 10tr</code> nếu có sẵn)
 • <code>/muctieu</code> xem tiến độ · <code>/muctieu lai</code> lập lại kế hoạch · <code>/muctieu xoa</code>
 
-📸 <b>Gửi ảnh</b> hóa đơn hoặc ảnh chuyển khoản, bot tự đọc số tiền (ghi chú <code>tách</code> để tách từng món, <code>td</code> nếu quẹt thẻ)
+📸 <b>Gửi ảnh</b> hóa đơn hoặc ảnh chuyển khoản, bot tự đọc số tiền (ghi chú <code>tách</code> để tách từng món, <code>td</code> / <code>ts momo</code> nếu mua trả sau)
 ✏️ <b>Sửa nhanh</b>: reply tin bot báo đã ghi với <code>60k</code>, <code>ăn uống</code>, <code>hôm qua</code> hoặc <code>xóa</code>
 🔔 21h chưa ghi gì thì bot nhắc (<code>/nhac tat</code> để tắt) · ngày 1 hằng tháng bot gửi tổng kết tháng trước (xem lúc nào cũng được: <code>/tongket</code>, <code>/tongket 10</code>)
 
 💵 <b>Số dư</b>: <code>/sodu 15tr</code> nhập tiền đang có · <code>/sodu</code> xem còn bao nhiêu, cuối tháng & tháng sau còn bao nhiêu
 
-💳 <b>Thẻ tín dụng</b> (trừ vào ngày 1 tháng sau)
-• <code>td phở 45k, grab 60k</code> hoặc <code>/the phở 45k</code>
-• <code>/the</code> xem nợ thẻ · <code>/the xoa</code> xóa lần ghi thẻ vừa rồi
-• <code>/the tra</code> thanh toán sớm hết nợ thẻ · <code>/the tra 2tr</code> trả một phần (khoản cũ nhất trước)
+💳 <b>Dư nợ trả sau</b> (thẻ tín dụng, MoMo / ZaloPay / SPayLater trả sau; trừ vào ngày 1 tháng sau)
+• <code>td phở 45k</code> (thẻ tín dụng) · <code>ts momo grab 60k</code> · <code>ts zalopay …</code> · <code>ts spay …</code>
+• <code>/the</code> xem dư nợ theo từng nguồn · <code>/the xoa</code> xóa lần ghi vừa rồi
+• Trả sớm: <code>/the tra</code> (hết) · <code>/the tra momo</code> (chỉ MoMo) · <code>/the tra 2tr</code> (một phần, khoản cũ nhất trước)
 
 🔁 <b>Chi cố định hàng tháng</b> (tự trừ vào ngày đã hẹn)
 • <code>/codinh tiền nhà 5tr ngày 5</code> · <code>/codinh</code> xem danh sách
@@ -137,7 +141,7 @@ export default {
   },
 
   /**
-   * 00:05: chuyển nợ thẻ, trừ khoản cố định, ngày 1 thì gửi tổng kết tháng trước.
+   * 00:05: chuyển dư nợ trả sau, trừ khoản cố định, ngày 1 thì gửi tổng kết tháng trước.
    * 21:00: nhắc nếu hôm nay chưa ghi gì.
    */
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
@@ -157,8 +161,8 @@ export default {
 function settledMessage(rows: CreditCharge[]) {
   const sum = rows.reduce((s, r) => s + r.amount, 0);
   return [
-    `💳 <b>Nợ thẻ tín dụng đã chuyển thành chi tiêu tháng ${formatMonth(billedMonth(rows[0].spent_on))}</b>: ${formatVndFull(sum)} (${rows.length} khoản)`,
-    ...rows.slice(0, 15).map((r) => `${emojiOf(r.category)} ${esc(r.item)} (${formatDay(r.spent_on)}): ${formatVnd(r.amount)}`),
+    `💳 <b>Dư nợ trả sau đã chuyển thành chi tiêu tháng ${formatMonth(billedMonth(rows[0].spent_on))}</b>: ${formatVndFull(sum)} (${rows.length} khoản: ${byProvider(rows)})`,
+    ...rows.slice(0, 15).map((r) => `${emojiOf(r.category)} ${esc(r.item)} (${paylaterInfo(r.provider).short} ${formatDay(r.spent_on)}): ${formatVnd(r.amount)}`),
     rows.length > 15 ? `… và ${rows.length - 15} khoản khác` : '',
     '',
     'Các khoản đã vào đúng hũ của tháng này. Xem: /hu',
@@ -242,7 +246,8 @@ async function handle(env: Env, message: TgMessage, origin: string) {
     case '/codinh':
       return fixed(env, chatId, arg, today);
     case '/the':
-      return credit(env, chatId, arg, message.message_id);
+    case '/trasau':
+      return credit(env, chatId, arg, message.message_id, cmd === '/trasau' ? 'other' : 'card');
     case '/sodu':
       return balance(env, chatId, arg, today);
     case '/tongket': {
@@ -284,15 +289,20 @@ async function handle(env: Env, message: TgMessage, origin: string) {
         const bal = text.match(/^(?:số dư|so du|sodu|đang có|hiện có|tiền hiện có|còn bao nhiêu)\s*[:\-]?\s*(.*?)\??$/i);
         if (bal && (!bal[1] || takeAmount(bal[1], 0))) return balance(env, chatId, bal[1], today);
       }
-      // "trả thẻ 2tr" / "thanh toán thẻ" = trả sớm nợ thẻ.
+      // Trả sớm: "trả thẻ 2tr" (chỉ thẻ tín dụng), "trả nợ momo", "trả dư nợ trả sau" (tất cả).
       {
-        const pay = text.match(/^(?:trả|thanh toán)\s+(?:nợ\s+)?thẻ(?:\s+tín dụng)?\s*(.*)$/i);
-        if (pay) return payCard(env, chatId, pay[1].trim());
+        // (?=\s|$) thay cho \b vì \b của JS không coi chữ có dấu (ẻ, ợ) là chữ.
+        const payCardOnly = text.match(/^(?:trả|thanh toán)\s+(?:nợ\s+)?thẻ(?:\s+tín dụng)?(?=\s|$)\s*(.*)$/i);
+        if (payCardOnly) return payCard(env, chatId, `thẻ ${payCardOnly[1]}`.trim());
+        const payAll = text.match(/^(?:trả|thanh toán)\s+(?:dư\s+)?nợ(?:\s+trả\s+sau)?(?=\s|$)\s*(.*)$/i);
+        if (payAll) return payCard(env, chatId, payAll[1].trim());
       }
-      // "td phở 45k" / "tín dụng: grab 60k" = quẹt thẻ tín dụng.
+      // Mua trả sau: "td phở 45k" (thẻ tín dụng), "ts momo phở 45k" / "trả sau zalopay: grab 60k".
       {
         const card = text.match(/^(?:td|tín dụng|thẻ tín dụng)\s*[:\-]?\s+(.+)$/is);
-        if (card) return credit(env, chatId, card[1], message.message_id);
+        if (card) return credit(env, chatId, card[1], message.message_id, 'card');
+        const later = text.match(/^(?:ts|trả sau)\s*[:\-]?\s+(.+)$/is);
+        if (later) return credit(env, chatId, later[1], message.message_id, 'other');
       }
       return record(env, chatId, text, message.message_id);
   }
@@ -361,8 +371,10 @@ async function recordPhoto(env: Env, message: TgMessage) {
     return;
   }
   await typing(env, chatId);
-  const card = caption.match(/^(?:td|tín dụng|thẻ tín dụng)\b\s*[:\-]?\s*(.*)$/is);
-  const note = card ? card[1] : caption;
+  // Ghi chú "td …" = thẻ tín dụng, "ts momo …" = trả sau qua MoMo.
+  const card = caption.match(/^(td|tín dụng|thẻ tín dụng|ts|trả sau)(?=[\s:\-]|$)\s*[:\-]?\s*(.*)$/is);
+  const later = card ? splitProvider(card[2], /^(ts|trả sau)$/i.test(card[1]) ? 'other' : 'card') : null;
+  const note = later ? later.rest : caption;
   let parsed;
   try {
     const file = await downloadFile(env, fileId);
@@ -379,7 +391,7 @@ async function recordPhoto(env: Env, message: TgMessage) {
   }
   const header = parsed.kind === 'transfer' ? '🏦 <b>Đọc từ ảnh chuyển khoản:</b>' : '🧾 <b>Đọc từ hóa đơn:</b>';
   const result = { ...parsed, source: 'gemini' };
-  if (card) return creditParsed(env, chatId, result, message.message_id, header);
+  if (later) return creditParsed(env, chatId, result, message.message_id, later.provider, header);
   return recordParsed(env, chatId, result, message.message_id, header);
 }
 
@@ -413,7 +425,7 @@ async function editByReply(env: Env, chatId: number, replyTo: number, text: stri
     if (rows.length === 0) return false;
   }
   if (rows.length === 0) {
-    await send(env, chatId, kind === 'credit' ? 'Khoản thẻ này đã bị xóa hoặc đã chuyển thành chi tiêu (sửa trên trang admin).' : 'Khoản này đã bị xóa rồi.');
+    await send(env, chatId, kind === 'credit' ? 'Khoản trả sau này đã bị xóa hoặc đã chuyển thành chi tiêu (sửa trên trang admin).' : 'Khoản này đã bị xóa rồi.');
     return true;
   }
   const table = kind === 'credit' ? 'credit_charges' : 'expenses';
@@ -825,90 +837,120 @@ function forecastMessage(f: Forecast) {
     f.next.spendBasis === 'jars'
       ? `  − Chi theo hũ: ${formatVnd(f.next.spend)}`
       : `  − Chi dự kiến: ${formatVnd(f.next.spend)} <i>(như tháng này)</i>`,
-    ...(f.next.creditDebt ? [`  − Trả thẻ tín dụng (ngày 1/${formatMonth(f.next.month)}): ${formatVnd(f.next.creditDebt)}`] : []),
+    ...(f.next.creditDebt ? [`  − Trả dư nợ trả sau (ngày 1/${formatMonth(f.next.month)}): ${formatVnd(f.next.creditDebt)}`] : []),
     `  ≈ Cuối tháng ${formatMonth(f.next.month)} còn: ${sign(f.next.end)}`,
   ];
   if (f.incomeThisMonthMissing) lines.push('', `<i>Đã qua ngày lương (${f.payday}) mà tháng này chưa nhập lương. Nhận rồi thì gõ /luong để số dư cộng thêm.</i>`);
   return lines.join('\n');
 }
 
-// ---------- Thẻ tín dụng ----------
+// ---------- Dư nợ trả sau (thẻ tín dụng, MoMo / ZaloPay / SPayLater trả sau) ----------
+
+/** Tổng theo từng nguồn, VD "MoMo 300k · thẻ TD 1,2tr". */
+function byProvider(rows: CreditCharge[]) {
+  const totals = new Map<string, number>();
+  for (const r of rows) totals.set(r.provider, (totals.get(r.provider) ?? 0) + r.amount);
+  return [...totals].map(([k, v]) => `${paylaterInfo(k).short} ${formatVnd(v)}`).join(' · ');
+}
+
+/** Tách nguồn ở đầu câu: "momo phở 45k" -> momo + "phở 45k"; không có thì dùng fallback. */
+function splitProvider(arg: string, fallback?: PaylaterKey): { provider?: PaylaterKey; rest: string } {
+  const [first = '', ...rest] = arg.trim().split(/\s+/);
+  const provider = matchPaylater(first.replace(/[:,]$/, ''));
+  return provider ? { provider, rest: rest.join(' ').replace(/^[:-]\s*/, '') } : { provider: fallback, rest: arg.trim() };
+}
 
 async function creditLine(env: Env, chatId: number) {
   const rows = await pendingCharges(env, chatId);
   if (!rows.length) return '';
   const sum = rows.reduce((s, r) => s + r.amount, 0);
-  return `💳 Nợ thẻ: ${formatVnd(sum)} → trừ ngày 1/${formatMonth(billedMonth(rows[rows.length - 1].spent_on))} (/the)`;
+  return `💳 Dư nợ trả sau: ${formatVnd(sum)} (${byProvider(rows)}) → trừ ngày 1/${formatMonth(billedMonth(rows[rows.length - 1].spent_on))} (/the)`;
 }
 
-async function credit(env: Env, chatId: number, arg: string, messageId: number) {
+async function credit(env: Env, chatId: number, arg: string, messageId: number, fallback: PaylaterKey = 'card') {
   if (!arg) {
     const rows = await pendingCharges(env, chatId);
-    if (!rows.length) return send(env, chatId, '💳 Không có nợ thẻ nào chưa tính. Ghi: <code>td phở 45k</code>');
+    if (!rows.length) return send(env, chatId, '💳 Không có dư nợ trả sau. Ghi: <code>td phở 45k</code> (thẻ) hoặc <code>ts momo phở 45k</code>');
     const sum = rows.reduce((s, r) => s + r.amount, 0);
-    return send(
-      env,
-      chatId,
-      [
-        `💳 <b>Nợ thẻ tín dụng</b>: ${formatVndFull(sum)} (${rows.length} khoản)`,
-        `Sẽ trừ vào ngày 1/${formatMonth(billedMonth(rows[rows.length - 1].spent_on))} (thành chi tiêu của tháng đó, vào đúng hũ).`,
-        '',
-        ...rows.slice(0, 30).map((r) => `${formatDay(r.spent_on)} ${emojiOf(r.category)} ${esc(r.item)}: <b>${formatVnd(r.amount)}</b>`),
-      ].join('\n'),
-    );
+    const lines = [
+      `💳 <b>Dư nợ trả sau</b>: ${formatVndFull(sum)} (${rows.length} khoản)`,
+      `Trừ vào ngày 1/${formatMonth(billedMonth(rows[rows.length - 1].spent_on))} (thành chi tiêu của tháng đó, vào đúng hũ).`,
+    ];
+    for (const p of PAYLATER) {
+      const group = rows.filter((r) => r.provider === p.key);
+      if (!group.length) continue;
+      lines.push('', `<b>${p.name}</b>: ${formatVndFull(group.reduce((s, r) => s + r.amount, 0))}`);
+      lines.push(...group.slice(0, 20).map((r) => `  ${formatDay(r.spent_on)} ${emojiOf(r.category)} ${esc(r.item)}: <b>${formatVnd(r.amount)}</b>`));
+    }
+    lines.push('', 'Trả sớm: <code>/the tra</code> · <code>/the tra momo</code> · <code>/the tra 2tr</code>');
+    return send(env, chatId, lines.join('\n'));
   }
-  // "/the tra" = thanh toán sớm hết nợ thẻ, "/the tra 2tr" = trả một phần.
+  // "/the tra" = trả sớm hết, "/the tra momo" = chỉ trả MoMo, "/the tra 2tr" = trả một phần.
   const pay = arg.match(/^(?:tra|trả|thanh toan|thanh toán)(?:\s+(.+))?$/i);
   if (pay) return payCard(env, chatId, pay[1] ?? '');
   if (['xoa', 'xóa'].includes(arg.toLowerCase())) {
     const last = await env.DB.prepare('SELECT id, message_id FROM credit_charges WHERE chat_id = ? AND settled = 0 ORDER BY id DESC LIMIT 1')
       .bind(chatId)
       .first<{ id: number; message_id: number | null }>();
-    if (!last) return send(env, chatId, 'Không có khoản thẻ nào để xóa.');
+    if (!last) return send(env, chatId, 'Không có khoản trả sau nào để xóa.');
     const removed = await (last.message_id === null
       ? env.DB.prepare('DELETE FROM credit_charges WHERE id = ? RETURNING item, amount').bind(last.id)
       : env.DB.prepare('DELETE FROM credit_charges WHERE chat_id = ? AND settled = 0 AND message_id = ? RETURNING item, amount').bind(chatId, last.message_id)
     ).all<{ item: string; amount: number }>();
-    return send(env, chatId, `🗑️ Đã xóa khỏi nợ thẻ: ${removed.results.map((r) => `${esc(r.item)} ${formatVnd(r.amount)}`).join(', ')}`);
+    return send(env, chatId, `🗑️ Đã xóa khỏi dư nợ trả sau: ${removed.results.map((r) => `${esc(r.item)} ${formatVnd(r.amount)}`).join(', ')}`);
   }
 
-  const parsed = await parseExpense(env, arg);
-  if (parsed.items.length === 0) return send(env, chatId, '🤔 Mình không thấy khoản nào. VD: <code>td phở 45k</code>');
-  return creditParsed(env, chatId, parsed, messageId);
+  const { provider, rest } = splitProvider(arg, fallback);
+  const parsed = await parseExpense(env, rest);
+  if (parsed.items.length === 0) return send(env, chatId, '🤔 Mình không thấy khoản nào. VD: <code>td phở 45k</code> hoặc <code>ts momo phở 45k</code>');
+  return creditParsed(env, chatId, parsed, messageId, provider ?? fallback);
 }
 
+/** Trả sớm: "" = trả hết, "momo" = chỉ MoMo, "2tr" = một phần, "momo 500k" = một phần của MoMo. */
 async function payCard(env: Env, chatId: number, arg: string) {
-  const pending = await pendingCharges(env, chatId);
+  const { provider, rest } = splitProvider(arg);
+  const pending = (await pendingCharges(env, chatId)).filter((c) => !provider || c.provider === provider);
   const debt = pending.reduce((s, c) => s + c.amount, 0);
-  if (!debt) return send(env, chatId, '💳 Không có nợ thẻ nào để trả.');
+  const label = provider ? paylaterInfo(provider).name : 'dư nợ trả sau';
+  if (!debt) return send(env, chatId, `💳 Không có ${provider ? `dư nợ ${label}` : 'dư nợ trả sau'} để trả.`);
   let amount: number | null = null;
-  if (arg && !/^(het|hết|tat ca|tất cả)$/i.test(arg)) {
-    amount = takeAmount(arg, 1000)?.amount ?? null;
-    if (!amount) return send(env, chatId, 'VD: <code>/the tra</code> (trả hết) hoặc <code>/the tra 2tr</code> (trả một phần).');
+  if (rest && !/^(het|hết|tat ca|tất cả)$/i.test(rest)) {
+    amount = takeAmount(rest, 1000)?.amount ?? null;
+    if (!amount) return send(env, chatId, 'VD: <code>/the tra</code> (trả hết), <code>/the tra momo</code>, <code>/the tra 2tr</code> (một phần).');
     if (amount >= debt) amount = null;
   }
   const today = vnDate(Date.now());
-  const result = await payEarly(env, chatId, amount, today);
+  const result = await payEarly(env, chatId, amount, today, provider);
   if (!result.paid) return send(env, chatId, 'Không trả được khoản nào (có thể vừa được trả ở nơi khác). Xem lại: /the');
+  const left = await pendingCharges(env, chatId);
   return send(
     env,
     chatId,
     [
-      `💳 <b>Đã thanh toán sớm ${formatVndFull(result.paid)}</b>`,
-      ...result.items.map((i) => `${esc(i.item)} (quẹt ${formatDay(i.spent_on)}): ${formatVnd(i.amount)}${i.partial ? ' <i>(một phần)</i>' : ''}`),
+      `💳 <b>Đã thanh toán sớm ${formatVndFull(result.paid)}</b>${provider ? ` (${label})` : ''}`,
+      ...result.items.map(
+        (i) => `${esc(i.item)} (${paylaterInfo(i.provider).short}, mua ${formatDay(i.spent_on)}): ${formatVnd(i.amount)}${i.partial ? ' <i>(một phần)</i>' : ''}`,
+      ),
       '',
       `Đã thành chi tiêu hôm nay (${formatDay(today)}), trừ vào số dư và tính vào hũ tháng ${formatMonth(monthOf(today))}.`,
-      result.remaining
-        ? `Còn nợ thẻ: <b>${formatVndFull(result.remaining)}</b>, trừ vào ngày 1/${formatMonth(billedMonth(pending[0].spent_on))}.`
-        : '✅ Hết nợ thẻ.',
+      left.length
+        ? `Còn dư nợ trả sau: <b>${formatVndFull(left.reduce((s, c) => s + c.amount, 0))}</b> (${byProvider(left)}), trừ vào ngày 1/${formatMonth(billedMonth(left[left.length - 1].spent_on))}.`
+        : '✅ Hết dư nợ trả sau.',
     ].join('\n'),
   );
 }
 
-async function creditParsed(env: Env, chatId: number, parsed: Parsed & { source: string }, messageId: number, header?: string) {
+async function creditParsed(
+  env: Env,
+  chatId: number,
+  parsed: Parsed & { source: string },
+  messageId: number,
+  provider: PaylaterKey = 'card',
+  header?: string,
+) {
   const today = vnDate(Date.now());
   const day = vnDate(Date.now(), parsed.dayOffset);
-  await addCharges(env, chatId, parsed.items, day, messageId);
+  await addCharges(env, chatId, parsed.items, day, messageId, provider);
   const pending = await pendingCharges(env, chatId);
   const sum = pending.reduce((s, r) => s + r.amount, 0);
   const sent = await send(
@@ -916,9 +958,10 @@ async function creditParsed(env: Env, chatId: number, parsed: Parsed & { source:
     chatId,
     [
       ...(header ? [header] : []),
-      ...parsed.items.map((i) => `💳 ${emojiOf(i.category)} ${esc(i.item)}: <b>${formatVnd(i.amount)}</b> <i>(${i.category})</i>`),
+      `💳 Trả sau qua <b>${paylaterInfo(provider).name}</b>`,
+      ...parsed.items.map((i) => `${emojiOf(i.category)} ${esc(i.item)}: <b>${formatVnd(i.amount)}</b> <i>(${i.category})</i>`),
       '',
-      `Nợ thẻ: <b>${formatVndFull(sum)}</b> · trừ vào ngày 1/${formatMonth(billedMonth(day))}, không tính vào tháng ${formatMonth(monthOf(day))}.`,
+      `Dư nợ trả sau: <b>${formatVndFull(sum)}</b> (${byProvider(pending)}) · trừ vào ngày 1/${formatMonth(billedMonth(day))}, không tính vào tháng ${formatMonth(monthOf(day))}.`,
       day < `${monthOf(today)}-01` ? '<i>Khoản này của tháng trước nên sẽ chuyển vào chi tiêu ngay đêm nay.</i>' : '',
       parsed.source === 'fallback' ? '<i>AI đang bận nên mình đọc tạm, danh mục để "Khác". Reply tin này để sửa.</i>' : '',
     ]

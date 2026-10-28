@@ -89,15 +89,16 @@ CREATE TABLE IF NOT EXISTS recurring (
 );
 CREATE INDEX IF NOT EXISTS idx_recurring_chat ON recurring (chat_id, active);
 
--- Khoản quẹt thẻ tín dụng: chưa tính là chi tiêu tháng quẹt; ngày 1 tháng sau cron chuyển thành chi tiêu của tháng sau.
+-- Dư nợ trả sau (thẻ tín dụng, MoMo/ZaloPay/SPayLater trả sau): chưa tính là chi tiêu tháng mua; ngày 1 tháng sau cron chuyển thành chi tiêu của tháng sau.
 CREATE TABLE IF NOT EXISTS credit_charges (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id INTEGER NOT NULL,
   amount INTEGER NOT NULL,
   item TEXT NOT NULL,
   category TEXT NOT NULL,
-  spent_on TEXT NOT NULL,            -- ngày quẹt thẻ
+  spent_on TEXT NOT NULL,            -- ngày quẹt thẻ / mua trả sau
   settled INTEGER NOT NULL DEFAULT 0, -- 1 = đã chuyển thành chi tiêu
+  provider TEXT NOT NULL DEFAULT 'card', -- card | momo | zalopay | spaylater | other (src/core.ts PAYLATER)
   message_id INTEGER,
   created_at INTEGER NOT NULL
 );

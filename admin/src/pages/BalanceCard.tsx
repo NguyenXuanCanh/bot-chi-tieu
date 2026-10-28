@@ -48,7 +48,7 @@ export function BalanceCard({ version }: { version: number }) {
               <p className="text-xs text-muted-foreground">
                 Nhập {vndShort(f.balance.snapshot.amount)} ngày {dayLabel(f.balance.snapshot.day)}
                 {f.balance.incomeSince ? ` + thu ${vndShort(f.balance.incomeSince)}` : ''}
-                {f.balance.spentSince ? ` − chi ${vndShort(f.balance.spentSince)}` : ''} từ đó. Quẹt thẻ chưa trừ cho tới khi trả thẻ.
+                {f.balance.spentSince ? ` − chi ${vndShort(f.balance.spentSince)}` : ''} từ đó. Khoản trả sau chưa trừ cho tới khi trả.
               </p>
             </>
           ) : (
@@ -81,7 +81,7 @@ export function BalanceCard({ version }: { version: number }) {
               total={f.next.end}
               rows={[
                 { label: f.next.income ? `Lương ngày ${f.payday}/${Number(f.next.month.slice(5))} (TB các tháng)` : 'Lương (chưa nhập tháng nào)', value: f.next.income },
-                ...(f.next.creditDebt ? [{ label: `Trả thẻ tín dụng (ngày 1/${Number(f.next.month.slice(5))})`, value: -f.next.creditDebt }] : []),
+                ...(f.next.creditDebt ? [{ label: `Trả dư nợ trả sau (ngày 1/${Number(f.next.month.slice(5))})`, value: -f.next.creditDebt }] : []),
                 { label: f.next.spendBasis === 'jars' ? 'Chi theo hũ' : 'Chi như tháng này', value: -f.next.spend },
               ]}
             />

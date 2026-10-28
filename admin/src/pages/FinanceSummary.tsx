@@ -8,7 +8,7 @@ import { api, type DashboardData, type JarStatus } from '../lib/api';
 import { JAR_STYLE, monthLabel, vnd, vndShort } from '../lib/format';
 import { useApi } from '../lib/use-api';
 
-/** "Bây giờ": số dư, tháng này còn dư, mục tiêu, nợ thẻ, các hũ, khoản sắp trừ, 6 tháng gần nhất. Không phụ thuộc kỳ đang chọn. */
+/** "Bây giờ": số dư, tháng này còn dư, mục tiêu, dư nợ trả sau, các hũ, khoản sắp trừ, 6 tháng gần nhất. Không phụ thuộc kỳ đang chọn. */
 export function FinanceSummary() {
   const { data, error, reload } = useApi(() => api<DashboardData>('/dashboard'), 'dashboard');
   if (error) return <ErrorBox message={error} onRetry={reload} />;
@@ -66,7 +66,7 @@ export function FinanceSummary() {
           )}
         </Tile>
 
-        <Tile icon={CreditCard} label="Nợ thẻ tín dụng" to="/budget">
+        <Tile icon={CreditCard} label="Dư nợ trả sau" to="/budget">
           {data.credit ? (
             <>
               <Big>{vnd(data.credit.total)}</Big>
@@ -77,7 +77,7 @@ export function FinanceSummary() {
           ) : (
             <>
               <Big muted>0 ₫</Big>
-              <Hint>Không có nợ thẻ chưa tính</Hint>
+              <Hint>Không có dư nợ trả sau</Hint>
             </>
           )}
         </Tile>
@@ -126,8 +126,8 @@ export function FinanceSummary() {
             {data.credit ? (
               <li className="flex items-center justify-between gap-3 py-2">
                 <div className="min-w-0">
-                  <p className="font-medium">Trả thẻ tín dụng</p>
-                  <p className="text-xs text-muted-foreground">{data.credit.count} khoản quẹt thẻ</p>
+                  <p className="font-medium">Trả dư nợ trả sau</p>
+                  <p className="text-xs text-muted-foreground">{data.credit.byProvider.map((p) => p.name).join(', ')}</p>
                 </div>
                 <div className="text-right">
                   <p className="num font-semibold">{vndShort(data.credit.total)}</p>

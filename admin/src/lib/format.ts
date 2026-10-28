@@ -85,3 +85,14 @@ export function addMonths(month: string, n: number) {
   const total = Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1 + n;
   return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;
 }
+
+/** Nguồn trả sau giống bot (src/core.ts PAYLATER). */
+export const PAYLATER = [
+  { key: 'card', name: 'Thẻ tín dụng', color: '#1d4ed8' },
+  { key: 'momo', name: 'MoMo Ví Trả Sau', color: '#a50064' },
+  { key: 'zalopay', name: 'ZaloPay Trả Sau', color: '#0068ff' },
+  { key: 'spaylater', name: 'SPayLater (ShopeePay)', color: '#d73211' },
+  { key: 'other', name: 'Trả sau khác', color: '#475569' },
+] as const;
+export type PaylaterKey = (typeof PAYLATER)[number]['key'];
+export const paylaterOf = (key: string) => PAYLATER.find((p) => p.key === key) ?? PAYLATER[0];

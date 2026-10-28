@@ -313,3 +313,28 @@ export function matchDay(text: string, today: string): string | null {
   if (day > today) day = `${--year}-${day.slice(5)}`;
   return day;
 }
+
+// ---------- Dư nợ trả sau ----------
+
+/** Nguồn trả sau: thẻ tín dụng và các ví trả sau. Tất cả trừ vào ngày 1 tháng sau. */
+export const PAYLATER = [
+  { key: 'card', name: 'Thẻ tín dụng', short: 'thẻ TD' },
+  { key: 'momo', name: 'MoMo Ví Trả Sau', short: 'MoMo' },
+  { key: 'zalopay', name: 'ZaloPay Trả Sau', short: 'ZaloPay' },
+  { key: 'spaylater', name: 'SPayLater (ShopeePay)', short: 'SPayLater' },
+  { key: 'other', name: 'Trả sau khác', short: 'trả sau' },
+] as const;
+export type PaylaterKey = (typeof PAYLATER)[number]['key'];
+export const isPaylater = (v: unknown): v is PaylaterKey => PAYLATER.some((p) => p.key === v);
+export const paylaterInfo = (key: string) => PAYLATER.find((p) => p.key === key) ?? PAYLATER[0];
+
+/** Từ người dùng gõ -> nguồn trả sau ("momo", "zalo", "spay", "shopee", "td", "thẻ"…), null nếu không phải. */
+export function matchPaylater(word: string): PaylaterKey | null {
+  const w = plain(word).replace(/\s+/g, '');
+  if (['td', 'the', 'thetd', 'tindung', 'thetindung', 'card', 'visa', 'master'].includes(w)) return 'card';
+  if (['momo', 'vitrasau', 'momotrasau'].includes(w)) return 'momo';
+  if (['zalo', 'zalopay', 'zlp', 'zalopaytrasau'].includes(w)) return 'zalopay';
+  if (['spay', 'spaylater', 'shopee', 'shopeepay', 'shopeepaylater'].includes(w)) return 'spaylater';
+  if (['khac', 'other'].includes(w)) return 'other';
+  return null;
+}

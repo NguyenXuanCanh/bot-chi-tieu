@@ -36,7 +36,7 @@ import { getPayday, setPref } from './prefs';
 import { dueDay } from './recurring';
 import { payEarly, pendingCharges } from './credit';
 import { addRecurring, chargeOne, listRecurring, type Recurring } from './recurring';
-import { addDays, addMonths, CATEGORY_NAMES, daysBetween, isJar, isMonth, JARS, monthOf, toCategory, vnDate, type JarKey } from './core';
+import { addDays, addMonths, CATEGORY_NAMES, isPaylater, PAYLATER, daysBetween, isJar, isMonth, JARS, monthOf, toCategory, vnDate, type JarKey } from './core';
 
 /**
  * API cho trang admin: /admin/api/*.
@@ -311,8 +311,9 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
     const value = readExpense({ ...body, trip_id: null });
     if (!value.value) return bad(value.error!);
     const v = value.value;
-    await env.DB.prepare('INSERT INTO credit_charges (chat_id, amount, item, category, spent_on, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(chat, v.amount, v.item, v.category, v.spent_on, Date.now())
+    const provider = isPaylater(body.provider) ? body.provider : 'card';
+    await env.DB.prepare('INSERT INTO credit_charges (chat_id, amount, item, category, spent_on, created_at, provider) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(chat, v.amount, v.item, v.category, v.spent_on, Date.now(), provider)
       .run();
     return json({ ok: true });
   }
@@ -320,7 +321,8 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
     // amount bỏ trống = trả hết.
     const amount = body.amount === undefined || body.amount === null || body.amount === '' ? null : Math.round(Number(body.amount));
     if (amount !== null && !(amount > 0)) return bad('Số tiền không hợp lệ');
-    const result = await payEarly(env, chat, amount, today);
+    // provider bỏ trống = trả mọi nguồn.
+    const result = await payEarly(env, chat, amount, today, isPaylater(body.provider) ? body.provider : undefined);
     if (!result.paid) return bad('Không có nợ thẻ để trả');
     return json(result);
   }
@@ -393,7 +395,14 @@ async function dashboard(env: Env, chat: number, today: string) {
     forecast: f,
     goal: goal && progress ? { title: goal.title, target: goal.target, deadline: goal.deadline, ...progress, months: undefined } : null,
     credit: credit.length
-      ? { total: credit.reduce((s, c) => s + c.amount, 0), count: credit.length, billedMonth: addMonths(monthOf(credit[credit.length - 1].spent_on), 1) }
+      ? {
+          total: credit.reduce((s, c) => s + c.amount, 0),
+          count: credit.length,
+          billedMonth: addMonths(monthOf(credit[credit.length - 1].spent_on), 1),
+          byProvider: PAYLATER.map((p) => ({ key: p.key, name: p.name, total: credit.filter((c) => c.provider === p.key).reduce((s, c) => s + c.amount, 0) })).filter(
+            (p) => p.total > 0,
+          ),
+        }
       : null,
     upcoming,
     fixedTotal: recurring.filter((r) => r.active === 1).reduce((s, r) => s + r.amount, 0),

@@ -23,7 +23,8 @@ Tính năng chính:
 - **Lương & hũ**: lương theo tháng (về ngày 27, đổi được), 4 hũ (bắt buộc, tiêu xài, nạp game, tiết kiệm).
   AI nhắc khi hũ chạm 80% hoặc vượt mức.
 - **Chi cố định hằng tháng**: cron tự ghi vào đúng ngày.
-- **Thẻ tín dụng**: khoản quẹt thẻ không tính vào tháng quẹt; ngày 1 tháng sau tự thành chi tiêu.
+- **Dư nợ trả sau** (thẻ tín dụng, MoMo / ZaloPay / SPayLater trả sau): không tính vào tháng mua; ngày 1 tháng sau tự
+  thành chi tiêu. Thanh toán sớm được (hết, một nguồn, hoặc một phần).
 - **Số dư & dự báo**: tiền đang có, dự báo cuối tháng này và cuối tháng sau.
 - **Mục tiêu tiết kiệm**: AI lập kế hoạch giữ/giảm/cắt theo danh mục.
 - **Báo cáo**: tổng kết tháng (ngày 1), nhắc 21h nếu chưa ghi gì, `/hoi` và ô hỏi đáp trên web.
@@ -56,7 +57,7 @@ src/                 Backend (Worker, TypeScript)
   budget.ts          Hũ, tình hình tháng, nhận xét AI, mục tiêu tiết kiệm + kế hoạch AI
   balance.ts         Số dư hiện tại + dự báo (tính cả ngày lương, nợ thẻ, khoản cố định)
   recurring.ts       Chi cố định hằng tháng (cron tự trừ)
-  credit.ts          Nợ thẻ tín dụng (ngày 1 tháng sau thành chi tiêu)
+  credit.ts          Dư nợ trả sau: ngày 1 tháng sau thành chi tiêu, thanh toán sớm
   reports.ts         Tổng kết tháng, nhắc 21h, nhắc ngày lương
   ask.ts             Hỏi đáp chi tiêu (dùng chung cho /hoi và web)
   prefs.ts           Tùy chọn theo chat (ngày lương, tắt nhắc)
@@ -87,7 +88,7 @@ scripts/             Telegram giả + script giả lập tin nhắn để test t
 | `jars`, `category_jars` | Số tiền mỗi hũ; danh mục → hũ (không có dòng = mặc định trong `core.ts`) |
 | `goals` | Mục tiêu tiết kiệm (một mục tiêu `active` mỗi lúc), `plan` = JSON kế hoạch AI |
 | `recurring` | Chi cố định (`start_month`, `last_month` để không trừ trùng) |
-| `credit_charges` | Quẹt thẻ (`settled` = 1 khi đã thành chi tiêu) |
+| `credit_charges` | Dư nợ trả sau (`provider`: card/momo/zalopay/spaylater/other; `settled` = 1 khi đã thành chi tiêu) |
 | `balances` | Các lần nhập số dư (lấy lần mới nhất) |
 | `bot_messages` | Tin bot đã gửi ↔ khoản chi, để reply-sửa |
 | `prefs` | `payday`, `remind` theo chat |
@@ -159,9 +160,9 @@ npm run db:remote     # chỉ khi schema.sql có bảng/chỉ mục mới (IF NO
 npm run deploy        # build admin rồi wrangler deploy (đăng ký luôn 2 cron)
 ```
 
-- **Đổi cấu trúc bảng đã có** (thêm cột…): `ALTER TABLE` không chạy lại an toàn được, nên đừng nhét vào `schema.sql`.
-  Chạy một lần bằng `npx wrangler d1 execute chi-tieu --remote --command "ALTER TABLE …"` và ghi lại ở đây.
-  Chưa có công cụ migration (xem mục 9).
+- **Đổi cấu trúc bảng đã có** (thêm cột…): thêm câu `ALTER TABLE` vào mảng `MIGRATIONS` trong `scripts/migrate.mjs`
+  **và** sửa `CREATE TABLE` tương ứng trong `schema.sql` (cho bản cài mới), rồi chạy `npm run db:migrate` **trước**
+  `npm run deploy`. Script chạy lại an toàn (cột đã có thì bỏ qua); `npm run setup` cũng tự chạy nó.
 - Webhook và menu lệnh do `setup` đặt. Đổi domain hoặc bot thì chạy lại `npm run setup`.
 - Thêm lệnh bot mới thì cập nhật cả 3 chỗ: `scripts/bot-commands.json` (menu "/", áp dụng khi chạy setup),
   `HELP` trong `src/index.ts`, và bảng hướng dẫn trong `admin/src/pages/AccountSettings.tsx`.
@@ -199,13 +200,14 @@ Lỗi nhỏ:
 - Xóa khoản cố định vừa tự trừ thì tháng đó không trừ lại được (vì `last_month` đã đặt).
 - Thưởng nhập trước ngày lương cũng chỉ cộng vào số dư ở ngày lương; lương trung bình tính cả thưởng.
 - Nhắc 21h không tính khoản thêm trên web là "đã ghi".
+- Mọi nguồn trả sau đều trừ ngày 1 tháng sau; chưa hỗ trợ ngày đến hạn riêng theo từng ví / thẻ.
 - Ảnh hóa đơn chưa có dự phòng khi Gemini lỗi (Workers AI có model đọc ảnh, chưa nối).
 - `bot_messages` chưa có dọn dẹp định kỳ.
 
 Nên làm:
 
 - Script test tự động toàn luồng bot (hiện chỉ có test cho `core.ts`; các luồng khác đã test tay theo mục 5).
-- Công cụ migration cho D1 (`wrangler d1 migrations`) thay cho `schema.sql` khi cần đổi cột.
+- Migration hiện chỉ hỗ trợ thêm cột (bỏ qua lỗi "duplicate column"); đổi/xóa cột thì cần cách khác.
 - Quyết định có bật `SIGNUP_CODE` không (đăng ký đang mở cho mọi người, dùng chung hạn mức AI miễn phí).
 - Cập nhật README cho đủ các tính năng mới (hiện README chỉ có phần cơ bản).
 

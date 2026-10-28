@@ -42,7 +42,8 @@ Chạy lại `npm run setup` bất cứ lúc nào (VD đổi bot, đổi key): b
 - `phở 45k, grab 60k` · `hôm qua cafe 35k` · gửi ảnh hóa đơn / ảnh chuyển khoản
 - Du lịch: `lẩu 300k ở Đà Lạt` tự gom thành chuyến · `/dulich Đà Lạt` … `/venha`
 - Lương & hũ: `/luong 25tr` · `/chiahu 10tr 6tr 1tr 8tr` · `/hu` · `/danhgia`
-- `/sodu 15tr` · `/codinh tiền nhà 5tr ngày 5` · `td phở 45k` (thẻ tín dụng) · `/muctieu 50tr tới tháng 2 năm sau`
+- `/sodu 15tr` · `/codinh tiền nhà 5tr ngày 5` · `/muctieu 50tr tới tháng 2 năm sau`
+- Trả sau: `td phở 45k` (thẻ tín dụng) · `ts momo grab 60k` · `ts zalopay …` · `ts spay …` · trả sớm `/the tra`
 - Báo cáo: `/homnay` `/tuan` `/thang` `/tongket` · `/hoi tháng này cà phê hết bao nhiêu?`
 - Sửa nhanh: reply tin bot với `60k`, `ăn uống`, `hôm qua` hoặc `xóa`
 
@@ -54,6 +55,7 @@ Gõ `/help` trên bot để xem đủ.
 npm test && npm run typecheck        # test hàm thuần + kiểm tra kiểu backend
 npm run deploy                       # build trang quản lý rồi deploy
 npm run db:remote                    # khi schema.sql có bảng mới
+npm run db:migrate                   # khi scripts/migrate.mjs có thay đổi cột (chạy trước deploy)
 npx wrangler tail                    # xem log trực tiếp
 ```
 

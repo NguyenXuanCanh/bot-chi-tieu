@@ -82,3 +82,14 @@ test('matchCategory ignores day words', async () => {
   assert.equal(matchCategory('quà'), 'Quà tặng');
   assert.equal(matchCategory('hôm qua cafe'), 'Cà phê & đồ uống');
 });
+
+test('matchPaylater', async () => {
+  const { matchPaylater } = await import('../src/core.ts');
+  assert.equal(matchPaylater('momo'), 'momo');
+  assert.equal(matchPaylater('ZaloPay'), 'zalopay');
+  assert.equal(matchPaylater('zalo'), 'zalopay');
+  assert.equal(matchPaylater('Shopee'), 'spaylater');
+  assert.equal(matchPaylater('spay'), 'spaylater');
+  assert.equal(matchPaylater('thẻ'), 'card');
+  assert.equal(matchPaylater('phở'), null);
+});

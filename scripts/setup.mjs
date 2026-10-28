@@ -129,6 +129,7 @@ if (tomlValue(config, 'database_id') === '__DATABASE_ID__') {
 const schema = wrangler(['d1', 'execute', 'DB', '--remote', '--file=schema.sql']);
 if (schema.code !== 0) fail(`Tạo bảng lỗi:\n${schema.out}`);
 ok('Đã tạo/cập nhật các bảng (chạy lại an toàn)');
+if (spawnSync('node', ['scripts/migrate.mjs'], { stdio: 'inherit' }).status !== 0) fail('Cập nhật cấu trúc bảng lỗi (xem trên).');
 
 // Bản cấu hình để chạy thử trên máy: bỏ [ai] vì binding AI cần đăng nhập remote.
 fs.writeFileSync('wrangler.local-test.toml', config.replace(/\[ai\]\nbinding = "AI"\n\n?/, ''));

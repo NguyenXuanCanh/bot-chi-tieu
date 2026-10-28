@@ -50,7 +50,7 @@ import {
   type Parsed,
 } from './core';
 import { forecast, setBalance, type Forecast } from './balance';
-import { addCharges, billedMonth, pendingCharges, settleCredit, type CreditCharge } from './credit';
+import { addCharges, billedMonth, payEarly, pendingCharges, settleCredit, type CreditCharge } from './credit';
 import { addRecurring, chargeOne, dueDay, listRecurring, recurringTotal, runRecurring, type Recurring } from './recurring';
 
 /**
@@ -102,6 +102,7 @@ const HELP = `👋 Ghi chi tiêu bằng cách nhắn như bình thường:
 💳 <b>Thẻ tín dụng</b> (trừ vào ngày 1 tháng sau)
 • <code>td phở 45k, grab 60k</code> hoặc <code>/the phở 45k</code>
 • <code>/the</code> xem nợ thẻ · <code>/the xoa</code> xóa lần ghi thẻ vừa rồi
+• <code>/the tra</code> thanh toán sớm hết nợ thẻ · <code>/the tra 2tr</code> trả một phần (khoản cũ nhất trước)
 
 🔁 <b>Chi cố định hàng tháng</b> (tự trừ vào ngày đã hẹn)
 • <code>/codinh tiền nhà 5tr ngày 5</code> · <code>/codinh</code> xem danh sách
@@ -282,6 +283,11 @@ async function handle(env: Env, message: TgMessage, origin: string) {
       {
         const bal = text.match(/^(?:số dư|so du|sodu|đang có|hiện có|tiền hiện có|còn bao nhiêu)\s*[:\-]?\s*(.*?)\??$/i);
         if (bal && (!bal[1] || takeAmount(bal[1], 0))) return balance(env, chatId, bal[1], today);
+      }
+      // "trả thẻ 2tr" / "thanh toán thẻ" = trả sớm nợ thẻ.
+      {
+        const pay = text.match(/^(?:trả|thanh toán)\s+(?:nợ\s+)?thẻ(?:\s+tín dụng)?\s*(.*)$/i);
+        if (pay) return payCard(env, chatId, pay[1].trim());
       }
       // "td phở 45k" / "tín dụng: grab 60k" = quẹt thẻ tín dụng.
       {
@@ -851,6 +857,9 @@ async function credit(env: Env, chatId: number, arg: string, messageId: number) 
       ].join('\n'),
     );
   }
+  // "/the tra" = thanh toán sớm hết nợ thẻ, "/the tra 2tr" = trả một phần.
+  const pay = arg.match(/^(?:tra|trả|thanh toan|thanh toán)(?:\s+(.+))?$/i);
+  if (pay) return payCard(env, chatId, pay[1] ?? '');
   if (['xoa', 'xóa'].includes(arg.toLowerCase())) {
     const last = await env.DB.prepare('SELECT id, message_id FROM credit_charges WHERE chat_id = ? AND settled = 0 ORDER BY id DESC LIMIT 1')
       .bind(chatId)
@@ -866,6 +875,34 @@ async function credit(env: Env, chatId: number, arg: string, messageId: number) 
   const parsed = await parseExpense(env, arg);
   if (parsed.items.length === 0) return send(env, chatId, '🤔 Mình không thấy khoản nào. VD: <code>td phở 45k</code>');
   return creditParsed(env, chatId, parsed, messageId);
+}
+
+async function payCard(env: Env, chatId: number, arg: string) {
+  const pending = await pendingCharges(env, chatId);
+  const debt = pending.reduce((s, c) => s + c.amount, 0);
+  if (!debt) return send(env, chatId, '💳 Không có nợ thẻ nào để trả.');
+  let amount: number | null = null;
+  if (arg && !/^(het|hết|tat ca|tất cả)$/i.test(arg)) {
+    amount = takeAmount(arg, 1000)?.amount ?? null;
+    if (!amount) return send(env, chatId, 'VD: <code>/the tra</code> (trả hết) hoặc <code>/the tra 2tr</code> (trả một phần).');
+    if (amount >= debt) amount = null;
+  }
+  const today = vnDate(Date.now());
+  const result = await payEarly(env, chatId, amount, today);
+  if (!result.paid) return send(env, chatId, 'Không trả được khoản nào (có thể vừa được trả ở nơi khác). Xem lại: /the');
+  return send(
+    env,
+    chatId,
+    [
+      `💳 <b>Đã thanh toán sớm ${formatVndFull(result.paid)}</b>`,
+      ...result.items.map((i) => `${esc(i.item)} (quẹt ${formatDay(i.spent_on)}): ${formatVnd(i.amount)}${i.partial ? ' <i>(một phần)</i>' : ''}`),
+      '',
+      `Đã thành chi tiêu hôm nay (${formatDay(today)}), trừ vào số dư và tính vào hũ tháng ${formatMonth(monthOf(today))}.`,
+      result.remaining
+        ? `Còn nợ thẻ: <b>${formatVndFull(result.remaining)}</b>, trừ vào ngày 1/${formatMonth(billedMonth(pending[0].spent_on))}.`
+        : '✅ Hết nợ thẻ.',
+    ].join('\n'),
+  );
 }
 
 async function creditParsed(env: Env, chatId: number, parsed: Parsed & { source: string }, messageId: number, header?: string) {
@@ -905,13 +942,7 @@ async function fixed(env: Env, chatId: number, arg: string, today: string) {
       env,
       chatId,
       [
-        `💵 <b>Số dư</b>: <code>/sodu 15tr</code> nhập tiền đang có · <code>/sodu</code> xem còn bao nhiêu, cuối tháng & tháng sau còn bao nhiêu
-
-💳 <b>Thẻ tín dụng</b> (trừ vào ngày 1 tháng sau)
-• <code>td phở 45k, grab 60k</code> hoặc <code>/the phở 45k</code>
-• <code>/the</code> xem nợ thẻ · <code>/the xoa</code> xóa lần ghi thẻ vừa rồi
-
-🔁 <b>Chi cố định hàng tháng</b>: ${formatVndFull(rows.reduce((s, r) => s + r.amount, 0))}`,
+        `🔁 <b>Chi cố định hàng tháng</b>: ${formatVndFull(rows.reduce((s, r) => s + r.amount, 0))}`,
         ...rows.map(
           (r, i) =>
             `${i + 1}. ${emojiOf(r.category)} ${esc(r.item)}: <b>${formatVnd(r.amount)}</b> · ngày ${r.day}${

@@ -194,6 +194,7 @@ const GUIDE: { group: string; rows: [string, string][] }[] = [
       ['lẩu 300k ở Đà Lạt', 'Có nơi chốn khác thành phố nhà: tự gom thành chuyến du lịch'],
       ['(gửi ảnh hóa đơn / chuyển khoản)', 'Bot đọc số tiền và ngày trên ảnh; ghi chú "tách" để tách từng món'],
       ['td phở 45k', 'Quẹt thẻ tín dụng: trừ vào ngày 1 tháng sau'],
+      ['/the tra · /the tra 2tr', 'Thanh toán sớm thẻ: trả hết / trả một phần, thành chi tiêu hôm nay'],
       ['(reply tin bot) 60k / ăn uống / hôm qua / xóa', 'Sửa nhanh khoản vừa ghi'],
       ['/xoa', 'Xóa khoản vừa ghi'],
     ],

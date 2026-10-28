@@ -34,7 +34,7 @@ import { botUsername, esc, send } from './telegram';
 import { forecast, setBalance } from './balance';
 import { getPayday, setPref } from './prefs';
 import { dueDay } from './recurring';
-import { pendingCharges } from './credit';
+import { payEarly, pendingCharges } from './credit';
 import { addRecurring, chargeOne, listRecurring, type Recurring } from './recurring';
 import { addDays, addMonths, CATEGORY_NAMES, daysBetween, isJar, isMonth, JARS, monthOf, toCategory, vnDate, type JarKey } from './core';
 
@@ -315,6 +315,14 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
       .bind(chat, v.amount, v.item, v.category, v.spent_on, Date.now())
       .run();
     return json({ ok: true });
+  }
+  if (path === '/credit/pay' && method === 'POST') {
+    // amount bỏ trống = trả hết.
+    const amount = body.amount === undefined || body.amount === null || body.amount === '' ? null : Math.round(Number(body.amount));
+    if (amount !== null && !(amount > 0)) return bad('Số tiền không hợp lệ');
+    const result = await payEarly(env, chat, amount, today);
+    if (!result.paid) return bad('Không có nợ thẻ để trả');
+    return json(result);
   }
   if ((m = path.match(/^\/credit\/(\d+)$/)) && method === 'DELETE') {
     await env.DB.prepare('DELETE FROM credit_charges WHERE id = ? AND chat_id = ? AND settled = 0').bind(Number(m[1]), chat).run();

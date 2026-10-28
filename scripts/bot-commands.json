@@ -8,7 +8,7 @@
   { "command": "tongket", "description": "Tổng kết tháng trước (/tongket 10 cho tháng 10)" },
   { "command": "muctieu", "description": "Mục tiêu tiết kiệm" },
   { "command": "codinh", "description": "Chi cố định hàng tháng: /codinh tiền nhà 5tr ngày 5" },
-  { "command": "the", "description": "Nợ thẻ tín dụng (td phở 45k để ghi)" },
+  { "command": "the", "description": "Nợ thẻ tín dụng (td phở 45k để ghi, /the tra để trả sớm)" },
   { "command": "homnay", "description": "Chi tiêu hôm nay" },
   { "command": "tuan", "description": "7 ngày qua" },
   { "command": "thang", "description": "Tháng này" },

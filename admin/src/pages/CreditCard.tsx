@@ -1,4 +1,4 @@
-import { CreditCard as CardIcon, Plus, Trash2 } from 'lucide-react';
+import { Banknote, CreditCard as CardIcon, Plus, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 import { MoneyField } from '../components/MoneyField';
@@ -12,6 +12,7 @@ export function CreditCardSection({ categories, onChanged }: { categories: strin
   const toast = useToast();
   const list = useApi(() => api<{ rows: CreditCharge[] }>('/credit'), 'credit');
   const [adding, setAdding] = useState(false);
+  const [paying, setPaying] = useState(false);
   const rows = list.data?.rows ?? [];
   const total = rows.reduce((s, r) => s + r.amount, 0);
   const billed = rows.length ? addMonths(rows[rows.length - 1].spent_on.slice(0, 7), 1) : addMonths(todayVn().slice(0, 7), 1);
@@ -53,9 +54,14 @@ export function CreditCardSection({ categories, onChanged }: { categories: strin
       {list.data && rows.length === 0 ? <p className="border-t border-border px-4 py-4 text-sm text-muted-foreground md:px-5">Không có nợ thẻ nào chưa tính.</p> : null}
       {rows.length ? (
         <>
-          <p className="border-t border-border bg-amber-50 px-4 py-2.5 text-sm text-amber-900 md:px-5">
-            Nợ <b className="num">{vnd(total)}</b> ({rows.length} khoản) → trừ vào ngày <b>1/{monthLabel(billed)}</b>
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-amber-50 px-4 py-2 text-sm text-amber-900 md:px-5">
+            <span>
+              Nợ <b className="num">{vnd(total)}</b> ({rows.length} khoản) → trừ vào ngày <b>1/{monthLabel(billed)}</b>
+            </span>
+            <Button variant="outline" onClick={() => setPaying(true)} className="min-h-9 bg-white">
+              <Banknote className="size-4" aria-hidden /> Thanh toán sớm
+            </Button>
+          </div>
           <ul className="divide-y divide-border border-t border-border">
             {rows.map((r) => (
               <li key={r.id} className="flex items-center justify-between gap-3 px-4 py-2.5 md:px-5">
@@ -78,6 +84,19 @@ export function CreditCardSection({ categories, onChanged }: { categories: strin
         </>
       ) : null}
 
+      <Modal open={paying} title="Thanh toán sớm thẻ tín dụng" onClose={() => setPaying(false)}>
+        <PayForm
+          total={total}
+          onCancel={() => setPaying(false)}
+          onPaid={(paid, remaining) => {
+            toast(remaining ? `Đã trả ${vndShort(paid)}, còn nợ ${vndShort(remaining)}` : `Đã trả ${vndShort(paid)}, hết nợ thẻ`);
+            setPaying(false);
+            list.reload();
+            onChanged?.();
+          }}
+        />
+      </Modal>
+
       <Modal open={adding} title="Ghi khoản quẹt thẻ" onClose={() => setAdding(false)}>
         <ChargeForm
           categories={categories}
@@ -91,6 +110,58 @@ export function CreditCardSection({ categories, onChanged }: { categories: strin
         />
       </Modal>
     </Card>
+  );
+}
+
+/** Trả hết hoặc một phần; khoản được trả thành chi tiêu hôm nay (trả khoản quẹt cũ nhất trước). */
+function PayForm({ total, onCancel, onPaid }: { total: number; onCancel: () => void; onPaid: (paid: number, remaining: number) => void }) {
+  const [mode, setMode] = useState<'all' | 'part'>('all');
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const value = mode === 'all' ? null : parseMoney(amount);
+    if (mode === 'part' && !value) return setError('Nhập số tiền muốn trả');
+    setBusy(true);
+    setError('');
+    try {
+      const result = await api<{ paid: number; remaining: number }>('/credit/pay', { method: 'POST', body: { amount: value } });
+      onPaid(result.paid, result.remaining);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-4">
+      <fieldset className="flex flex-col gap-2">
+        <legend className="sr-only">Số tiền trả</legend>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="radio" name="pay" className="size-4 accent-primary" checked={mode === 'all'} onChange={() => setMode('all')} />
+          Trả hết <b className="num">{vnd(total)}</b>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="radio" name="pay" className="size-4 accent-primary" checked={mode === 'part'} onChange={() => setMode('part')} />
+          Trả một phần
+        </label>
+      </fieldset>
+      {mode === 'part' ? <MoneyField label="Số tiền trả" value={amount} onChange={setAmount} required placeholder="VD 2tr" /> : null}
+      <p className="rounded-lg bg-muted px-3 py-2 text-sm">
+        Khoản được trả thành chi tiêu <b>hôm nay</b>: trừ vào tiền đang có và tính vào hũ tháng này. Trả một phần thì trả khoản quẹt cũ
+        nhất trước, phần còn lại vẫn trừ vào ngày 1 tháng sau.
+      </p>
+      {error ? <ErrorBox message={error} /> : null}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Hủy
+        </Button>
+        <Button type="submit" loading={busy}>
+          Xác nhận đã trả
+        </Button>
+      </div>
+    </form>
   );
 }
 

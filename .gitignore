@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.dev.vars
+wrangler.local-test.toml
+admin/dist/
+.webhook-secret
+# Skill UI UX Pro Max cài cục bộ cho Claude Code (bên thứ ba, ~4.5MB), không thuộc mã nguồn.
+admin/.claude/
+# Cấu hình riêng của từng bản cài (tên Worker, database_id): tạo bằng `npm run setup` từ wrangler.example.toml.
+wrangler.toml

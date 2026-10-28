@@ -1,0 +1,36 @@
+# Mẫu cấu hình. `npm run setup` tự chép thành wrangler.toml (file riêng của mỗi người, không commit)
+# và điền tên Worker + database_id. Muốn làm tay: chép file này thành wrangler.toml rồi sửa 2 chỗ __...__.
+name = "__WORKER_NAME__"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+preview_urls = false
+
+# Trang admin: build vào admin/dist, Cloudflare phục vụ file tĩnh; các đường dẫn dưới đây chạy Worker trước.
+[assets]
+directory = "./admin/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/webhook", "/admin/api/*", "/health"]
+
+# 00:05 giờ VN (17:05 UTC): chuyển nợ thẻ, trừ khoản cố định, ngày 1 gửi tổng kết tháng.
+# 21:00 giờ VN (14:00 UTC): nhắc nếu hôm đó chưa ghi gì. Đổi giờ thì sửa cả CRON_* trong src/index.ts.
+[triggers]
+crons = ["5 17 * * *", "0 14 * * *"]
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chi-tieu"
+database_id = "__DATABASE_ID__"
+
+[vars]
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+# Thành phố nhà mặc định (đổi được bằng /nha trong chat).
+DEFAULT_HOME_CITY = "TP. Hồ Chí Minh"
+# Tùy chọn: APP_URL (mặc định lấy domain đang chạy), BOT_USERNAME (mặc định hỏi Telegram).
+
+# Secrets (npm run setup tự đặt; làm tay: npx wrangler secret put <TÊN>):
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, AUTH_SECRET, GEMINI_API_KEY (nên có)
+#   ALLOWED_CHAT_IDS (tùy chọn: chat luôn được dùng bot), SIGNUP_CODE (tùy chọn: mã mời khi tạo tài khoản)

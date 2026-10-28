@@ -1,8 +1,9 @@
 import { handleAdmin } from './admin';
 import { getPayday } from './prefs';
-import { monthlyReport, remindIdle, remindPayday, sendMonthlyReports, setPref } from './reports';
+import { periodReport, remindIdle, remindPayday, sendMonthlyReports, setPref } from './reports';
 import { isAllowedChat } from './accounts';
-import { downloadFile, esc, send, typing } from './telegram';
+import { answerCallback, downloadFile, esc, removeButtons, send, typing, type Buttons } from './telegram';
+import { isSalary, listPeriods, periodFor, receiveIncome, salaryState } from './period';
 import { parseExpense, parseImage, type Env } from './ai';
 import { askSpending } from './ask';
 import {
@@ -16,8 +17,8 @@ import {
   jarLine,
   jarOfCategory,
   jarWarning,
-  monthStatus,
   parsePlan,
+  periodStatus,
   PlanError,
   planGoal,
   reviewMonth,
@@ -43,6 +44,7 @@ import {
   paylaterInfo,
   type PaylaterKey,
   monthOf,
+  monthPeriod,
   plain,
   parseAmount,
   parseGoal,
@@ -52,8 +54,9 @@ import {
   vnDate,
   type JarKey,
   type Parsed,
+  type Period,
 } from './core';
-import { forecast, setBalance, type Forecast } from './balance';
+import { forecast, setBalance, type Forecast, type ForecastLine } from './balance';
 import { addCharges, billedMonth, payEarly, pendingCharges, settleCredit, type CreditCharge } from './credit';
 import { addRecurring, chargeOne, dueDay, listRecurring, recurringTotal, runRecurring, type Recurring } from './recurring';
 
@@ -73,6 +76,8 @@ type TgMessage = {
   reply_to_message?: { message_id: number };
 };
 
+type TgCallback = { id: string; data?: string; message?: { message_id: number; chat: { id: number; type?: string } } };
+
 /** Cron trong wrangler.toml: 00:05 và 21:00 giờ VN. */
 const CRON_DAILY = '5 17 * * *';
 const CRON_REMIND = '0 14 * * *';
@@ -89,7 +94,8 @@ const HELP = `👋 Ghi chi tiêu bằng cách nhắn như bình thường:
 • <code>/nha TP.HCM</code> — thành phố nhà (chi ở đây không tính là du lịch)
 
 🫙 <b>Lương & hũ</b>
-• <code>/luong 25tr</code> — ghi lương tháng này (thưởng: <code>/luong 3tr thưởng</code>); lương về ngày 27, đổi bằng <code>/ngayluong</code>
+• <code>/luong 25tr</code> — ghi lương (chờ nhận); lương về thì bấm nút <b>+25tr</b>: cộng vào số dư và hôm đó là <b>đầu tháng mới</b>
+• Thưởng cộng ngay: <code>/luong 3tr thưởng</code> · ngày lương để bot nhắc: <code>/ngayluong 27</code>
 • <code>/chiahu 10tr 6tr 1tr 8tr</code> — chia hũ: bắt buộc, tiêu xài, nạp game, tiết kiệm (ghi % cũng được)
 • <code>/hu</code> xem các hũ · <code>/danhgia</code> AI đánh giá tháng này
 
@@ -130,7 +136,11 @@ export default {
     if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.TELEGRAM_WEBHOOK_SECRET) {
       return new Response('forbidden', { status: 403 });
     }
-    const update = (await request.json().catch(() => ({}))) as { message?: TgMessage };
+    const update = (await request.json().catch(() => ({}))) as { message?: TgMessage; callback_query?: TgCallback };
+    if (update.callback_query) {
+      ctx.waitUntil(handleButton(env, update.callback_query).catch((error) => console.error('[button] lỗi:', error)));
+      return new Response('ok');
+    }
     const message = update.message;
     const isImage = !!message?.photo?.length || !!message?.document?.mime_type?.startsWith('image/');
     if (message?.text || isImage) {
@@ -217,8 +227,11 @@ async function handle(env: Env, message: TgMessage, origin: string) {
       return send(env, chatId, await summary(env, chatId, today, today, 'Hôm nay'));
     case '/tuan':
       return send(env, chatId, await summary(env, chatId, vnDate(Date.now(), -6), today, '7 ngày qua'));
-    case '/thang':
-      return send(env, chatId, await summary(env, chatId, `${today.slice(0, 7)}-01`, today, `Tháng ${Number(today.slice(5, 7))}`));
+    case '/thang': {
+      // Kỳ hiện tại: từ lần nhận lương gần nhất (hoặc đầu tháng lịch nếu chưa có).
+      const p = await periodFor(env, chatId, today);
+      return send(env, chatId, await summary(env, chatId, p.from, today, p.kind === 'cycle' ? `Kỳ từ ${formatDay(p.from)}` : `Tháng ${Number(today.slice(5, 7))}`));
+    }
     case '/chuyendi':
       return send(env, chatId, await tripsReport(env, chatId));
     case '/nha':
@@ -235,8 +248,11 @@ async function handle(env: Env, message: TgMessage, origin: string) {
       return ask(env, chatId, arg);
     case '/luong':
       return income(env, chatId, arg, today);
-    case '/hu':
-      return send(env, chatId, await jarsReport(env, chatId, today));
+    case '/hu': {
+      const salary = await salaryState(env, chatId, today);
+      const hint = salary.pending.length || salary.due ? '\n\n💰 <b>Lương chưa nhận</b>: lương về rồi thì bấm nút dưới để cộng vào số dư và bắt đầu tháng mới.' : '';
+      return send(env, chatId, (await jarsReport(env, chatId, today)) + hint, salaryButtons({ pendingSalary: salary.pending, salaryDue: salary.due }));
+    }
     case '/chiahu':
       return splitJars(env, chatId, arg, today);
     case '/danhgia':
@@ -251,13 +267,17 @@ async function handle(env: Env, message: TgMessage, origin: string) {
     case '/sodu':
       return balance(env, chatId, arg, today);
     case '/tongket': {
-      // "/tongket" = tháng trước, "/tongket 10" hoặc "/tongket 10/2026" = tháng đó.
+      // "/tongket" = kỳ trước (hoặc tháng trước), "/tongket 10" hoặc "/tongket 10/2026" = tháng lịch đó.
       const m = arg.match(/^(\d{1,2})(?:\/(\d{4}))?$/);
-      const month = m
-        ? `${m[2] ?? (Number(m[1]) > Number(today.slice(5, 7)) ? Number(today.slice(0, 4)) - 1 : today.slice(0, 4))}-${m[1].padStart(2, '0')}`
-        : addMonths(monthOf(today), -1);
+      let period: Period;
+      if (m) {
+        period = monthPeriod(`${m[2] ?? (Number(m[1]) > Number(today.slice(5, 7)) ? Number(today.slice(0, 4)) - 1 : today.slice(0, 4))}-${m[1].padStart(2, '0')}`);
+      } else {
+        const periods = await listPeriods(env, chatId, today);
+        period = periods[0].kind === 'cycle' ? (periods[1] ?? periods[0]) : monthPeriod(addMonths(monthOf(today), -1));
+      }
       await typing(env, chatId);
-      return send(env, chatId, (await monthlyReport(env, chatId, month, today)) ?? `Tháng ${formatMonth(month)} chưa có dữ liệu thu chi.`);
+      return send(env, chatId, (await periodReport(env, chatId, period, today)) ?? `${period.label} chưa có dữ liệu thu chi.`);
     }
     case '/ngayluong': {
       const n = Number(arg);
@@ -499,7 +519,7 @@ async function jarNotes(env: Env, chatId: number, parsed: Parsed, day: string) {
     const jar = jarOfCategory(map, i.category);
     added.set(jar, (added.get(jar) ?? 0) + i.amount);
   }
-  const status = await monthStatus(env, chatId, monthOf(day), vnDate(Date.now()));
+  const status = await periodStatus(env, chatId, await periodFor(env, chatId, vnDate(Date.now()), day), vnDate(Date.now()));
   const lines = [''];
   for (const j of status.jars) {
     if (!added.has(j.key)) continue;
@@ -660,24 +680,66 @@ async function income(env: Env, chatId: number, text: string, today: string) {
   const found = takeAmount(text, 1000);
   if (!found) return send(env, chatId, 'Ví dụ: <code>/luong 25tr</code> hoặc <code>/luong 3tr thưởng dự án</code>');
   const month = monthOf(today);
-  const note = found.rest.trim().slice(0, 60) || 'Lương';
-  await addIncome(env, chatId, month, found.amount, note);
-  const status = await monthStatus(env, chatId, month, today);
-  const lines = [
-    `💰 Đã ghi thu nhập tháng ${formatMonth(month)}: <b>+${formatVndFull(found.amount)}</b> (${esc(note)})`,
-    `Tổng thu nhập tháng: <b>${formatVndFull(status.income)}</b> · đã chi ${formatVnd(status.spent)}`,
-    ...(await paydayNote(env, chatId, month, today)),
-    '',
-    allocationNote(status.income, status.jars.reduce((s, j) => s + j.budget, 0)),
-  ];
-  return send(env, chatId, lines.join('\n'));
+  const note = found.rest.trim().replace(/^(nhận\s+)?/i, '').slice(0, 60) || 'Lương';
+  // Lương: ghi "chờ nhận", bấm nút khi tiền về mới cộng vào số dư và bắt đầu tháng mới. Thưởng / khoản khác: cộng ngay.
+  const salary = isSalary(note);
+  const row = await addIncome(env, chatId, month, found.amount, note, !salary);
+  if (salary) {
+    return send(
+      env,
+      chatId,
+      [
+        `💰 Đã ghi <b>${esc(note)} ${formatVndFull(found.amount)}</b>, đang <b>chờ nhận</b>.`,
+        'Khi lương về tài khoản, bấm nút dưới: lương được cộng vào số dư và <b>hôm đó là đầu tháng mới</b> (các hũ tính lại từ đầu).',
+      ].join('\n'),
+      [[{ text: `✅ Đã nhận +${formatVnd(found.amount)}`, data: `inc:${row!.id}` }]],
+    );
+  }
+  const status = await periodStatus(env, chatId, await periodFor(env, chatId, today), today);
+  return send(
+    env,
+    chatId,
+    [
+      `💰 Đã cộng <b>+${formatVndFull(found.amount)}</b> (${esc(note)}) vào thu nhập và số dư.`,
+      `Thu nhập · ${status.period.label}: <b>${formatVndFull(status.income)}</b> · đã chi ${formatVnd(status.spent)}`,
+    ].join('\n'),
+  );
 }
 
-/** Lương nhập trước ngày lương: báo là tới ngày đó mới cộng vào số dư. */
-async function paydayNote(env: Env, chatId: number, month: string, today: string) {
-  const payday = await getPayday(env, chatId);
-  if (Number(today.slice(8, 10)) >= payday) return [];
-  return [`<i>Lương về ngày ${payday}/${formatMonth(month)}, tới hôm đó mới cộng vào số dư (/sodu). Đổi ngày lương: /ngayluong</i>`];
+/** Nút "+lương" cho các khoản lương đang chờ (hoặc lương dự kiến khi tới ngày mà chưa ghi). */
+function salaryButtons(f: Pick<Forecast, 'pendingSalary' | 'salaryDue'>): Buttons {
+  if (f.pendingSalary.length) return f.pendingSalary.map((p) => [{ text: `✅ Đã nhận +${formatVnd(p.amount)} (${p.note || 'Lương'})`, data: `inc:${p.id}` }]);
+  if (f.salaryDue) return [[{ text: `✅ Đã nhận lương +${formatVnd(f.salaryDue.amount)}`, data: `sal:${f.salaryDue.amount}` }]];
+  return [];
+}
+
+/** Bấm "+lương": cộng vào số dư, mở tháng mới, gửi tổng kết kỳ vừa xong. */
+async function handleButton(env: Env, q: TgCallback) {
+  const chatId = q.message?.chat.id;
+  if (!chatId || (q.message?.chat.type && q.message.chat.type !== 'private') || !(await isAllowedChat(env, chatId))) {
+    return answerCallback(env, q.id);
+  }
+  const today = vnDate(Date.now());
+  const [kind, value] = (q.data ?? '').split(':');
+  const target = kind === 'inc' ? { incomeId: Number(value) } : kind === 'sal' ? { amount: Number(value) } : null;
+  if (!target || !Object.values(target).every((n) => Number.isInteger(n) && n > 0)) return answerCallback(env, q.id);
+  const result = await receiveIncome(env, chatId, today, target);
+  await removeButtons(env, chatId, q.message!.message_id);
+  if (!result) {
+    await answerCallback(env, q.id, 'Khoản này đã được nhận rồi');
+    return;
+  }
+  await answerCallback(env, q.id, `Đã cộng +${formatVnd(result.amount)}`);
+  const lines = [`💰 Đã cộng <b>+${formatVndFull(result.amount)}</b> (${esc(result.note)}) vào số dư.`];
+  if (result.started) {
+    lines.push(`📅 <b>Bắt đầu tháng mới từ hôm nay (${formatDay(today)})</b>: các hũ tính lại từ đầu, kỳ này dự kiến tới ${formatDay(result.started.to)}.`);
+  }
+  lines.push('Xem các hũ: /hu · số dư: /sodu');
+  await send(env, chatId, lines.join('\n'));
+  if (result.previous) {
+    const report = await periodReport(env, chatId, result.previous, today);
+    if (report) await send(env, chatId, report);
+  }
 }
 
 function allocationNote(income: number, allocated: number) {
@@ -689,9 +751,9 @@ function allocationNote(income: number, allocated: number) {
 }
 
 async function jarsReport(env: Env, chatId: number, today: string) {
-  const s = await monthStatus(env, chatId, monthOf(today), today);
+  const s = await periodStatus(env, chatId, await periodFor(env, chatId, today), today);
   return [
-    `🫙 <b>Các hũ tháng ${formatMonth(s.month)}</b> (đã qua ${s.daysPassed}/${s.daysInMonth} ngày)`,
+    `🫙 <b>Các hũ · ${s.period.label}</b> (đã qua ${s.daysPassed}/${s.daysInMonth} ngày)`,
     `💰 Thu nhập: ${s.income ? formatVnd(s.income) : 'chưa nhập (/luong 25tr)'} · Đã chi: ${formatVnd(s.spent)}${s.saved !== null ? ` · Còn dư: <b>${formatVnd(s.saved)}</b>` : ''}`,
     '',
     ...s.jars.map(jarLine),
@@ -708,7 +770,7 @@ async function splitJars(env: Env, chatId: number, arg: string, today: string) {
   const parts = arg.split(/\s+/).filter(Boolean);
   const usage = `Chia theo thứ tự: ${JAR_KEYS.map((k) => jarInfo(k).name.toLowerCase()).join(', ')}.\nVD: <code>/chiahu 10tr 6tr 1tr 8tr</code> hoặc <code>/chiahu 40% 25% 5% 30%</code>`;
   if (parts.length !== JAR_KEYS.length) return send(env, chatId, `${await jarsReport(env, chatId, today)}\n\n${usage}`);
-  const status = await monthStatus(env, chatId, monthOf(today), today);
+  const status = await periodStatus(env, chatId, await periodFor(env, chatId, today), today);
   const amounts: Partial<Record<JarKey, number>> = {};
   for (const [i, part] of parts.entries()) {
     const percent = part.match(/^(\d+(?:[.,]\d+)?)%$/);
@@ -722,9 +784,9 @@ async function splitJars(env: Env, chatId: number, arg: string, today: string) {
 }
 
 async function review(env: Env, chatId: number, today: string) {
-  const s = await monthStatus(env, chatId, monthOf(today), today);
+  const s = await periodStatus(env, chatId, await periodFor(env, chatId, today), today);
   const text = await reviewMonth(env, s);
-  return send(env, chatId, `🧐 <b>Đánh giá tháng ${formatMonth(s.month)}</b>\n\n${esc(text)}`);
+  return send(env, chatId, `🧐 <b>Đánh giá · ${s.period.label}</b>\n\n${esc(text)}`);
 }
 
 // ---------- Mục tiêu tiết kiệm ----------
@@ -812,35 +874,25 @@ async function balance(env: Env, chatId: number, arg: string, today: string) {
   }
   const f = await forecast(env, chatId, today);
   if (!f) return send(env, chatId, '💵 Chưa nhập số dư. Gõ <code>/sodu 15tr</code> với tổng tiền mặt + tài khoản bạn đang có.');
-  return send(env, chatId, (arg ? '✅ Đã lưu số dư.\n\n' : '') + forecastMessage(f));
+  return send(env, chatId, (arg ? '✅ Đã lưu số dư.\n\n' : '') + forecastMessage(f), salaryButtons(f));
 }
 
 function forecastMessage(f: Forecast) {
   const b = f.balance;
   const sign = (n: number) => (n < 0 ? `<b>−${formatVnd(-n)}</b> ⚠️` : `<b>${formatVnd(n)}</b>`);
+  const line = (l: ForecastLine) =>
+    `  ${l.amount >= 0 ? '+' : '−'} ${esc(l.label)}${l.day ? ` (ngày ${formatDay(l.day)})` : ''}: ${formatVnd(Math.abs(l.amount))}`;
   const lines = [
     `💵 <b>Đang có: ${formatVndFull(b.now)}</b>`,
     b.incomeSince || b.spentSince
       ? `<i>(nhập ${formatVnd(b.snapshot.amount)} ngày ${formatDay(b.snapshot.day)}${b.incomeSince ? ` + thu ${formatVnd(b.incomeSince)}` : ''}${b.spentSince ? ` − chi ${formatVnd(b.spentSince)}` : ''})</i>`
       : `<i>(nhập ngày ${formatDay(b.snapshot.day)})</i>`,
-    '',
-    `📅 <b>Cuối tháng ${formatMonth(f.month)}</b> (còn ${f.daysLeft} ngày)`,
-    ...f.incomePending.map((r) => `  + ${esc(r.note)} (ngày ${r.day}/${formatMonth(f.month)}): ${formatVnd(r.amount)}${r.expected ? ' <i>(TB các tháng, chưa nhập)</i>' : ''}`),
-    ...f.fixedPending.map((r) => `  − ${esc(r.item)} (cố định, ngày ${r.day}): ${formatVnd(r.amount)}`),
-    `  − Dự kiến chi tiếp: ${formatVnd(f.moreSpend)} <i>(${f.moreSpendBasis === 'jars' ? 'phần còn lại của các hũ' : 'theo mức chi mỗi ngày tháng này'})</i>`,
-    `  ≈ Còn: ${sign(f.endOfMonth)}`,
-    '',
-    `📅 <b>Tháng ${formatMonth(f.next.month)}</b>`,
-    f.next.income
-      ? `  + Lương (ngày ${f.payday}/${formatMonth(f.next.month)}): ${formatVnd(f.next.income)} <i>(TB các tháng đã nhập)</i>`
-      : '  + Lương: chưa biết (chưa nhập lương tháng nào: /luong)',
-    f.next.spendBasis === 'jars'
-      ? `  − Chi theo hũ: ${formatVnd(f.next.spend)}`
-      : `  − Chi dự kiến: ${formatVnd(f.next.spend)} <i>(như tháng này)</i>`,
-    ...(f.next.creditDebt ? [`  − Trả dư nợ trả sau (ngày 1/${formatMonth(f.next.month)}): ${formatVnd(f.next.creditDebt)}`] : []),
-    `  ≈ Cuối tháng ${formatMonth(f.next.month)} còn: ${sign(f.next.end)}`,
   ];
-  if (f.incomeThisMonthMissing) lines.push('', `<i>Đã qua ngày lương (${f.payday}) mà tháng này chưa nhập lương. Nhận rồi thì gõ /luong để số dư cộng thêm.</i>`);
+  for (const p of [f.current, f.next]) {
+    lines.push('', `📅 <b>${p.label}</b>`, ...p.lines.map(line), `  ≈ Còn: ${sign(p.end)}`);
+  }
+  if (f.pendingSalary.length) lines.push('', '<i>Lương chưa cộng vào số dư cho tới khi bạn bấm nút nhận bên dưới.</i>');
+  else if (f.salaryDue) lines.push('', '<i>Đã tới ngày lương. Lương về rồi thì bấm nút dưới (số khác thì gõ /luong 32tr).</i>');
   return lines.join('\n');
 }
 

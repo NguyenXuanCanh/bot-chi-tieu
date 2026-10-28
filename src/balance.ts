@@ -1,13 +1,13 @@
 import type { Env } from './ai';
-import { averageIncome, jarBudgets, monthStatus } from './budget';
-import { pendingCharges } from './credit';
-import { getPayday, RECEIVED_ON_SQL } from './prefs';
-import { addMonths, daysInMonth, monthOf, SPEND_JARS } from './core';
+import { jarBudgets, periodStatus } from './budget';
+import { billedMonth, pendingCharges } from './credit';
+import { addDays, addMonths, daysBetween, formatDay, formatMonth, monthOf, monthPeriod, sameDayNextMonth, SPEND_JARS, type Period } from './core';
+import { salaryState, type PendingIncome } from './period';
 import { dueDay, listRecurring } from './recurring';
 
 /**
- * Số dư tiền đang có và dự báo cuối tháng này / cuối tháng sau.
- * Quẹt thẻ tín dụng không trừ tiền mặt; tới khi thành chi tiêu (ngày 1 tháng sau) mới trừ, tức là lúc trả thẻ.
+ * Số dư tiền đang có và dự báo cuối kỳ này / cuối kỳ sau (kỳ = từ lần nhận lương, hoặc tháng lịch nếu chưa có).
+ * Lương chỉ cộng vào số dư khi người dùng bấm nhận; khoản trả sau chỉ trừ khi thành chi tiêu (ngày 1 tháng sau hoặc trả sớm).
  */
 
 export type BalanceSnapshot = { id: number; amount: number; day: string; created_at: number };
@@ -17,19 +17,16 @@ export async function setBalance(env: Env, chat: number, amount: number, today: 
 }
 
 /**
- * Số dư bây giờ = lần nhập gần nhất + thu nhập đã về tài khoản sau đó − chi tiêu sau đó
- * (khoản ghi lùi ngày trước lúc nhập coi như đã nằm trong số dư). Lương nhập trước ngày lương chỉ cộng khi tới ngày lương.
+ * Số dư bây giờ = lần nhập gần nhất + thu nhập nhận sau lúc đó − chi tiêu sau lúc đó
+ * (khoản ghi lùi ngày trước lúc nhập coi như đã nằm trong số dư).
  */
-export async function currentBalance(env: Env, chat: number, today: string, payday: number) {
+export async function currentBalance(env: Env, chat: number) {
   const snap = await env.DB.prepare('SELECT id, amount, day, created_at FROM balances WHERE chat_id = ? ORDER BY id DESC LIMIT 1')
     .bind(chat)
     .first<BalanceSnapshot>();
   if (!snap) return null;
   const [inc, exp] = await env.DB.batch([
-    env.DB.prepare(
-      `WITH i AS (SELECT amount, created_at, ${RECEIVED_ON_SQL} AS recv FROM incomes WHERE chat_id = ?)
-       SELECT COALESCE(SUM(amount), 0) AS s FROM i WHERE recv <= ? AND (recv > ? OR (recv = ? AND created_at > ?))`,
-    ).bind(payday, chat, today, snap.day, snap.day, snap.created_at),
+    env.DB.prepare('SELECT COALESCE(SUM(amount), 0) AS s FROM incomes WHERE chat_id = ? AND received_at > ?').bind(chat, snap.created_at),
     env.DB.prepare(
       'SELECT COALESCE(SUM(amount), 0) AS s FROM expenses WHERE chat_id = ? AND (spent_on > ? OR (spent_on = ? AND created_at > ?))',
     ).bind(chat, snap.day, snap.day, snap.created_at),
@@ -39,94 +36,114 @@ export async function currentBalance(env: Env, chat: number, today: string, payd
   return { snapshot: snap, incomeSince, spentSince, now: snap.amount + incomeSince - spentSince };
 }
 
+/** Một dòng dự báo: + thu / − chi, có ngày (chi tiếp theo hũ thì không có ngày). */
+export type ForecastLine = { label: string; amount: number; day?: string; expected?: boolean };
+export type ForecastPeriod = { label: string; from: string; to: string; lines: ForecastLine[]; end: number };
+
 export type Forecast = {
   balance: NonNullable<Awaited<ReturnType<typeof currentBalance>>>;
-  month: string;
-  daysLeft: number;
+  period: Period;
   payday: number;
-  /** Thu nhập sẽ về trước cuối tháng (lương đã nhập chưa tới ngày, hoặc lương dự kiến nếu chưa nhập). */
-  incomePending: { note: string; amount: number; day: number; expected: boolean }[];
-  /** Khoản cố định tháng này chưa trừ. */
-  fixedPending: { item: string; amount: number; day: number }[];
-  /** Dự kiến chi tiếp tới cuối tháng (ngoài khoản cố định). */
-  moreSpend: number;
-  moreSpendBasis: 'jars' | 'pace';
-  endOfMonth: number;
-  next: {
-    month: string;
-    income: number;
-    creditDebt: number;
-    spend: number;
-    spendBasis: 'jars' | 'average';
-    end: number;
-  };
-  incomeThisMonthMissing: boolean;
+  current: ForecastPeriod;
+  next: ForecastPeriod;
+  /** Lương đã ghi chờ bấm nhận. */
+  pendingSalary: PendingIncome[];
+  /** Tới ngày lương mà chưa ghi lương nào: hiện nút nhận lương với số dự kiến. */
+  salaryDue: { amount: number } | null;
 };
 
 export async function forecast(env: Env, chat: number, today: string): Promise<Forecast | null> {
-  const payday = await getPayday(env, chat);
-  const balance = await currentBalance(env, chat, today, payday);
+  const balance = await currentBalance(env, chat);
   if (!balance) return null;
-  const month = monthOf(today);
-  const nextMonth = addMonths(month, 1);
-  const dayNow = Number(today.slice(8, 10));
-  const [status, budgets, recurring, credit, income] = await Promise.all([
-    monthStatus(env, chat, month, today),
+  const [salary, budgets, recurring, credit] = await Promise.all([
+    salaryState(env, chat, today),
     jarBudgets(env, chat),
     listRecurring(env, chat),
     pendingCharges(env, chat),
-    averageIncome(env, chat),
   ]);
-  const daysLeft = daysInMonth(month) - dayNow;
-  const active = recurring.filter((r) => r.active === 1);
-  const fixedPending = active
-    .filter((r) => r.start_month <= month && r.last_month !== month && dueDay(r, month) > dayNow)
-    .map((r) => ({ item: r.item, amount: r.amount, day: dueDay(r, month) }));
-  const fixedPendingSum = fixedPending.reduce((s, r) => s + r.amount, 0);
+  const { period: cur, payday, average: avgIncome } = salary;
+  const status = await periodStatus(env, chat, cur, today);
+  const cycle = cur.kind === 'cycle';
+  const nextFrom = addDays(cur.to, 1);
+  const next: Period = cycle
+    ? { key: nextFrom, kind: 'cycle', from: nextFrom, to: addDays(sameDayNextMonth(nextFrom), -1), open: true, label: '' }
+    : monthPeriod(addMonths(monthOf(today), 1));
 
-  // Chi tiếp tới cuối tháng: phần còn lại của các hũ (nếu đã chia hũ), không thì theo tốc độ chi mỗi ngày của tháng này.
-  const jarSpend = SPEND_JARS.reduce((s, k) => s + budgets[k], 0);
-  let moreSpend: number;
-  let moreSpendBasis: Forecast['moreSpendBasis'];
-  if (jarSpend > 0) {
-    moreSpend = Math.max(0, jarSpend - status.spent - fixedPendingSum);
-    moreSpendBasis = 'jars';
+  // Lương: kỳ lương thì lương kế tiếp mở kỳ sau; tháng lịch thì về ngày lương của tháng (này nếu chưa nhận, và tháng sau).
+  const salaries = salary.pending;
+  const slots: { day: string }[] = [];
+  if (!cycle) {
+    const thisPayday = `${monthOf(today)}-${String(payday).padStart(2, '0')}`;
+    if (!salary.gotSalary) slots.push({ day: thisPayday < today ? today : thisPayday });
+    slots.push({ day: `${monthOf(next.from)}-${String(payday).padStart(2, '0')}` });
   } else {
-    moreSpend = dayNow > 0 ? Math.round((status.spent / dayNow) * daysLeft) : 0;
-    moreSpendBasis = 'pace';
+    slots.push({ day: nextFrom });
   }
-  // Thu nhập tháng này chưa về: lương đã nhập nhưng chưa tới ngày lương; chưa nhập mà chưa tới ngày lương thì dùng lương TB.
-  const pendingRows = await env.DB.prepare(
-    `SELECT amount, note, ${RECEIVED_ON_SQL} AS recv FROM incomes WHERE chat_id = ? AND month = ? AND ${RECEIVED_ON_SQL} > ? ORDER BY recv`,
-  )
-    .bind(payday, chat, month, payday, today)
-    .all<{ amount: number; note: string | null; recv: string }>();
-  const incomePending: Forecast['incomePending'] = pendingRows.results.map((r) => ({
-    note: r.note || 'Lương',
-    amount: r.amount,
-    day: Number(r.recv.slice(8, 10)),
-    expected: false,
-  }));
-  if (status.income === 0 && dayNow < payday && income > 0) incomePending.push({ note: 'Lương (dự kiến)', amount: income, day: payday, expected: true });
-  const endOfMonth = balance.now + incomePending.reduce((s, r) => s + r.amount, 0) - fixedPendingSum - moreSpend;
+  const incomeLines: ForecastLine[] = slots.map((slot, i) => {
+    const p = salaries[i];
+    return p
+      ? { label: `${p.note || 'Lương'} chờ nhận`, amount: p.amount, day: slot.day }
+      : { label: 'Lương (dự kiến, TB các tháng)', amount: avgIncome, day: slot.day, expected: true };
+  });
 
-  // Tháng sau: lương TB − chi theo hũ (nợ thẻ sẽ thành chi tiêu tháng sau nên nằm trong hũ; nếu chưa chia hũ thì cộng riêng).
-  const creditDebt = credit.filter((c) => monthOf(c.spent_on) < nextMonth).reduce((s, c) => s + c.amount, 0);
-  const average = status.daysPassed > 0 ? Math.round((status.spent / status.daysPassed) * status.daysInMonth) : 0;
-  // Nợ thẻ trả một lần vào ngày 1 tháng sau, tính riêng, cộng thêm với chi tiêu bình thường của tháng sau.
-  const spend = jarSpend > 0 ? jarSpend : average;
+  // Khoản cố định chưa trừ trong khoảng (from, to].
+  const fixedIn = (from: string, to: string): ForecastLine[] =>
+    recurring
+      .filter((r) => r.active === 1)
+      .flatMap((r) => {
+        const out: ForecastLine[] = [];
+        for (let m = monthOf(from); m <= monthOf(to); m = addMonths(m, 1)) {
+          const day = `${m}-${String(dueDay(r, m)).padStart(2, '0')}`;
+          if (day <= from || day > to || m < r.start_month || r.last_month === m) continue;
+          out.push({ label: `${r.item} (cố định)`, amount: -r.amount, day });
+        }
+        return out;
+      });
+
+  // Dư nợ trả sau: trừ vào ngày 1 tháng sau tháng mua.
+  const creditByDay = new Map<string, number>();
+  for (const c of credit) {
+    const day = `${billedMonth(c.spent_on)}-01`;
+    const at = day <= today ? addDays(today, 1) : day;
+    creditByDay.set(at, (creditByDay.get(at) ?? 0) + c.amount);
+  }
+  const creditLines: ForecastLine[] = [...creditByDay].map(([day, amount]) => ({ label: 'Trả dư nợ trả sau', amount: -amount, day }));
+
+  const inRange = (l: ForecastLine, from: string, to: string) => !!l.day && l.day >= from && l.day <= to;
+  const jarSpend = SPEND_JARS.reduce((s, k) => s + budgets[k], 0);
+  const daysLeft = Math.max(0, daysBetween(today, cur.to));
+  const perDay = status.daysPassed > 0 ? status.spent / status.daysPassed : 0;
+
+  // Kỳ này: từ mai tới hết kỳ. Chi tiếp = phần còn lại của các hũ (đã gồm khoản cố định), không thì theo mức chi mỗi ngày.
+  const fixedA = fixedIn(today, cur.to);
+  const fixedASum = -fixedA.reduce((s, l) => s + l.amount, 0);
+  const spendA = jarSpend > 0 ? Math.max(0, jarSpend - status.spent - fixedASum) : Math.round(perDay * daysLeft);
+  const linesA: ForecastLine[] = [
+    ...incomeLines.filter((l) => inRange(l, today, cur.to)),
+    ...fixedA,
+    ...creditLines.filter((l) => inRange(l, addDays(today, 1), cur.to)),
+    { label: jarSpend > 0 ? 'Chi tiếp (phần còn lại của các hũ)' : 'Chi tiếp (theo mức chi mỗi ngày)', amount: -spendA },
+  ].sort((a, b) => (a.day ?? '9').localeCompare(b.day ?? '9'));
+  const endA = balance.now + linesA.reduce((s, l) => s + l.amount, 0);
+
+  // Kỳ sau: lương + chi theo hũ (hũ đã gồm khoản cố định) + dư nợ trả sau rơi vào kỳ đó.
+  const spendB = jarSpend > 0 ? jarSpend : Math.round(perDay * (daysBetween(next.from, next.to) + 1));
+  const linesB: ForecastLine[] = [
+    ...incomeLines.filter((l) => inRange(l, next.from, next.to)),
+    ...creditLines.filter((l) => inRange(l, next.from, next.to)),
+    { label: jarSpend > 0 ? 'Chi theo hũ' : 'Chi như kỳ này', amount: -spendB },
+  ].sort((a, b) => (a.day ?? '9').localeCompare(b.day ?? '9'));
+  const endB = endA + linesB.reduce((s, l) => s + l.amount, 0);
+
+  const label = (p: Period, end: string) => (p.kind === 'cycle' ? `Cuối kỳ (${formatDay(end)})` : `Cuối tháng ${formatMonth(monthOf(end))}`);
+
   return {
     balance,
-    month,
-    daysLeft,
+    period: cur,
     payday,
-    incomePending,
-    fixedPending,
-    moreSpend,
-    moreSpendBasis,
-    endOfMonth,
-    next: { month: nextMonth, income, creditDebt, spend, spendBasis: jarSpend > 0 ? 'jars' : 'average', end: endOfMonth + income - creditDebt - spend },
-    // Đã qua ngày lương mà tháng này chưa nhập lương.
-    incomeThisMonthMissing: status.income === 0 && dayNow >= payday,
+    current: { label: label(cur, cur.to), from: today, to: cur.to, lines: linesA.filter((l) => l.amount !== 0 || l.expected), end: endA },
+    next: { label: label(next, next.to), from: next.from, to: next.to, lines: linesB.filter((l) => l.amount !== 0 || l.expected), end: endB },
+    pendingSalary: salaries,
+    salaryDue: salary.due,
   };
 }

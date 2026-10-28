@@ -4,11 +4,12 @@ import { Link } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 import { Card, CardTitle, CategoryBadge, cx, EmptyState, ErrorBox, Spinner } from '../components/ui';
-import { api, type Summary } from '../lib/api';
+import { api, type Meta, type Summary } from '../lib/api';
 import { addDays, changePercent, dayLabel, dayRange, styleOf, todayVn, vnd, vndShort } from '../lib/format';
 import { useApi } from '../lib/use-api';
 import { AskCard } from './AskCard';
 import { FinanceSummary } from './FinanceSummary';
+import { SalaryBanner } from './SalaryBanner';
 
 type Preset = 'month' | 'lastMonth' | '7d' | '30d';
 const PRESETS: { value: Preset; label: string }[] = [
@@ -18,11 +19,13 @@ const PRESETS: { value: Preset; label: string }[] = [
   { value: '30d', label: '30 ngày' },
 ];
 
-function rangeOf(preset: Preset) {
+/** "Kỳ này / Kỳ trước" theo kỳ lương (từ lần nhận lương) nếu có, không thì theo tháng lịch. */
+function rangeOf(preset: Preset, meta?: Meta) {
   const today = todayVn();
   const monthStart = `${today.slice(0, 7)}-01`;
   switch (preset) {
     case 'lastMonth': {
+      if (meta?.period.kind === 'cycle' && meta.previousPeriod) return { from: meta.previousPeriod.from, to: meta.previousPeriod.to };
       const lastEnd = addDays(monthStart, -1);
       return { from: `${lastEnd.slice(0, 7)}-01`, to: lastEnd };
     }
@@ -31,13 +34,16 @@ function rangeOf(preset: Preset) {
     case '30d':
       return { from: addDays(today, -29), to: today };
     default:
-      return { from: monthStart, to: today };
+      return meta?.period.kind === 'cycle' ? { from: meta.period.from, to: today } : { from: monthStart, to: today };
   }
 }
 
 export default function OverviewPage() {
   const [preset, setPreset] = useState<Preset>('month');
-  const range = rangeOf(preset);
+  const meta = useApi(() => api<Meta>('/meta'), 'meta');
+  const cycle = meta.data?.period.kind === 'cycle';
+  const range = rangeOf(preset, meta.data);
+  const [version, setVersion] = useState(0);
   const { data, error, loading, reload } = useApi(() => api<Summary>('/summary', { query: range }), `${range.from}|${range.to}`);
 
   return (
@@ -47,7 +53,8 @@ export default function OverviewPage() {
         <p className="text-sm text-muted-foreground">Tình hình tiền bạc hiện tại và chi tiêu theo kỳ</p>
       </header>
 
-      <FinanceSummary />
+      <SalaryBanner onReceived={() => setVersion((v) => v + 1)} />
+      <FinanceSummary key={version} />
 
       <AskCard />
 
@@ -66,7 +73,7 @@ export default function OverviewPage() {
                 'min-h-9 rounded-md px-3 text-sm font-medium transition-colors duration-150',
                 preset === p.value ? 'bg-primary text-white' : 'text-foreground hover:bg-muted',
               )}>
-              {p.label}
+              {cycle && p.value === 'month' ? 'Kỳ này' : cycle && p.value === 'lastMonth' ? 'Kỳ trước' : p.label}
             </button>
           ))}
         </div>

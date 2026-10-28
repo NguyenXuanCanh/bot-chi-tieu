@@ -202,7 +202,7 @@ const GUIDE: { group: string; rows: [string, string][] }[] = [
   {
     group: 'Lương, hũ, số dư',
     rows: [
-      ['/luong 25tr', 'Ghi lương tháng này (về ngày 27, đổi bằng /ngayluong)'],
+      ['/luong 25tr', 'Ghi lương chờ nhận; lương về thì bấm nút +25tr: cộng vào số dư và hôm đó là đầu tháng mới'],
       ['/chiahu 10tr 6tr 1tr 8tr', 'Chia lương vào 4 hũ: bắt buộc, tiêu xài, nạp game, tiết kiệm'],
       ['/hu · /danhgia', 'Xem các hũ · AI nhận xét tháng này'],
       ['/sodu 15tr · /sodu', 'Nhập tiền đang có · xem cuối tháng, tháng sau còn bao nhiêu'],

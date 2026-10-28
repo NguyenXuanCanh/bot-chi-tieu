@@ -6,7 +6,7 @@ import {
   createGoal,
   goalProgress,
   jarBudgets,
-  monthStatus,
+  periodStatus,
   parsePlan,
   PlanError,
   planGoal,
@@ -30,6 +30,7 @@ import {
   type User,
 } from './accounts';
 import { askSpending } from './ask';
+import { isSalary, listPeriods, periodByKey, periodFor, receiveIncome, salaryState } from './period';
 import { botUsername, esc, send } from './telegram';
 import { forecast, setBalance } from './balance';
 import { getPayday, setPref } from './prefs';
@@ -150,7 +151,16 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
     const range = await env.DB.prepare('SELECT MIN(spent_on) AS first, MAX(spent_on) AS last FROM expenses WHERE chat_id = ?')
       .bind(chat)
       .first<{ first: string | null; last: string | null }>();
-    return json({ categories: CATEGORY_NAMES, cities: cities.results.map((c) => c.city), today: vnDate(Date.now()), ...range });
+    // Kỳ hiện tại và kỳ trước (kỳ lương nếu có, không thì tháng lịch) cho bộ lọc "Kỳ này / Kỳ trước".
+    const periods = await listPeriods(env, chat, vnDate(Date.now()));
+    return json({
+      categories: CATEGORY_NAMES,
+      cities: cities.results.map((c) => c.city),
+      today: vnDate(Date.now()),
+      ...range,
+      period: periods[0],
+      previousPeriod: periods[1] ?? null,
+    });
   }
 
   if (path === '/summary' && method === 'GET') return json(await summary(env, chat, url.searchParams));
@@ -214,21 +224,40 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
   // ---------- Lương & hũ ----------
   const today = vnDate(Date.now());
   if (path === '/budget' && method === 'GET') {
-    const month = isMonth(url.searchParams.get('month')) ? url.searchParams.get('month')! : monthOf(today);
-    const [status, mapping] = await Promise.all([monthStatus(env, chat, month, today), categoryJarMap(env, chat)]);
-    return json({ status, mapping, jars: JARS, categories: CATEGORY_NAMES });
+    // period = ngày bắt đầu kỳ lương hoặc "YYYY-MM"; bỏ trống = kỳ hiện tại.
+    const period = await periodByKey(env, chat, url.searchParams.get('period'), today);
+    const [status, mapping, periods] = await Promise.all([
+      periodStatus(env, chat, period, today),
+      categoryJarMap(env, chat),
+      listPeriods(env, chat, today),
+    ]);
+    return json({ status, mapping, jars: JARS, categories: CATEGORY_NAMES, periods: periods.map((p) => ({ key: p.key, label: p.label })) });
   }
   if (path === '/budget/review' && method === 'POST') {
-    const month = isMonth(body.month) ? body.month : monthOf(today);
-    return json({ text: await reviewMonth(env, await monthStatus(env, chat, month, today)) });
+    const period = await periodByKey(env, chat, typeof body.period === 'string' ? body.period : null, today);
+    return json({ text: await reviewMonth(env, await periodStatus(env, chat, period, today)) });
   }
   if (path === '/incomes' && method === 'POST') {
     const amount = Math.round(Number(body.amount));
-    if (!isMonth(body.month)) return bad('Tháng không hợp lệ');
     if (!(amount > 0) || amount > 10_000_000_000) return bad('Số tiền không hợp lệ');
     const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 60) : 'Lương';
-    await addIncome(env, chat, body.month, amount, note);
+    // received = false: ghi lương chờ nhận. Đã nhận + là lương: cộng vào số dư và bắt đầu tháng mới từ hôm nay.
+    if (body.received === false) {
+      await addIncome(env, chat, monthOf(today), amount, note, false);
+      return json({ ok: true });
+    }
+    if (isSalary(note)) return json(await receiveIncome(env, chat, today, { amount, note }));
+    await addIncome(env, chat, monthOf(today), amount, note, true);
     return json({ ok: true });
+  }
+  if (path === '/salary' && method === 'GET') {
+    const state = await salaryState(env, chat, today);
+    return json({ pending: state.pending, due: state.due, period: state.period, average: state.average });
+  }
+  if ((m = path.match(/^\/incomes\/(\d+)\/receive$/)) && method === 'POST') {
+    const result = await receiveIncome(env, chat, today, { incomeId: Number(m[1]) });
+    if (!result) return bad('Khoản này đã được nhận rồi');
+    return json(result);
   }
   if ((m = path.match(/^\/incomes\/(\d+)$/)) && method === 'DELETE') {
     await env.DB.prepare('DELETE FROM incomes WHERE id = ? AND chat_id = ?').bind(Number(m[1]), chat).run();
@@ -363,7 +392,7 @@ async function dashboard(env: Env, chat: number, today: string) {
   const month = monthOf(today);
   const from = addMonths(month, -5);
   const [status, f, goal, credit, recurring, history] = await Promise.all([
-    monthStatus(env, chat, month, today),
+    periodFor(env, chat, today).then((p) => periodStatus(env, chat, p, today)),
     forecast(env, chat, today),
     activeGoal(env, chat),
     pendingCharges(env, chat),

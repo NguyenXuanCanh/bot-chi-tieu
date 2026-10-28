@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS incomes (
   month TEXT NOT NULL,
   amount INTEGER NOT NULL,
   note TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  received_at INTEGER               -- NULL = lương chờ nhận (bấm "+lương" mới cộng vào số dư)
 );
 CREATE INDEX IF NOT EXISTS idx_incomes_chat_month ON incomes (chat_id, month);
 
@@ -151,4 +152,12 @@ CREATE TABLE IF NOT EXISTS link_codes (
   expires_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   sent_at INTEGER NOT NULL
+);
+
+-- Ngày bắt đầu các kỳ chi tiêu: tự thêm khi bấm nhận lương. Kỳ chạy tới hết ngày trước kỳ sau (src/core.ts cyclePeriods).
+CREATE TABLE IF NOT EXISTS cycles (
+  chat_id INTEGER NOT NULL,
+  start_on TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, start_on)
 );

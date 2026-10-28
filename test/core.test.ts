@@ -93,3 +93,22 @@ test('matchPaylater', async () => {
   assert.equal(matchPaylater('thẻ'), 'card');
   assert.equal(matchPaylater('phở'), null);
 });
+
+test('cycle periods', async () => {
+  const { cyclePeriods, periodOf, sameDayNextMonth } = await import('../src/core.ts');
+  assert.equal(sameDayNextMonth('2026-01-31'), '2026-02-28');
+  assert.equal(sameDayNextMonth('2026-10-27'), '2026-11-27');
+  const p = cyclePeriods(['2026-09-26', '2026-10-28'], '2026-11-05');
+  assert.deepEqual(
+    p.map((x) => [x.from, x.to, x.open]),
+    [
+      ['2026-10-28', '2026-11-27', true],
+      ['2026-09-26', '2026-10-27', false],
+    ],
+  );
+  // Quá hạn chưa bắt đầu kỳ mới: kỳ cũ kéo tới hôm nay.
+  assert.equal(cyclePeriods(['2026-10-28'], '2026-12-02')[0].to, '2026-12-02');
+  assert.equal(periodOf(['2026-10-28'], '2026-11-03', '2026-11-05').key, '2026-10-28');
+  assert.equal(periodOf(['2026-10-28'], '2026-10-10', '2026-11-05').key, '2026-10'); // trước kỳ đầu: tháng lịch
+  assert.equal(periodOf([], '2026-10-10', '2026-11-05').label, 'Tháng 10/2026');
+});

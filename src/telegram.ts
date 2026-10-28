@@ -7,13 +7,22 @@ const base = (env: Env) => env.TELEGRAM_API || 'https://api.telegram.org';
 export const esc = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** Gửi tin nhắn HTML; trả về message_id của tin bot vừa gửi (null nếu lỗi). */
-export async function send(env: Env, chatId: number, text: string): Promise<number | null> {
+/** Nút bấm dưới tin nhắn: mỗi hàng một mảng nút, callback_data tối đa 64 byte. */
+export type Buttons = { text: string; data: string }[][];
+
+export async function send(env: Env, chatId: number, text: string, buttons?: Buttons): Promise<number | null> {
   // Khóa âm = tài khoản chỉ dùng web, không có chat Telegram để gửi.
   if (chatId <= 0) return null;
   const response = await fetch(`${base(env)}/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      ...(buttons?.length ? { reply_markup: { inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) } } : {}),
+    }),
   });
   if (!response.ok) {
     console.error('[telegram] gửi lỗi:', response.status, await response.text());
@@ -60,3 +69,18 @@ export async function downloadFile(env: Env, fileId: string): Promise<{ data: st
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return { data: btoa(binary), size: bytes.length };
 }
+
+async function call(env: Env, method: string, body: object) {
+  await fetch(`${base(env)}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).catch((error) => console.error(`[telegram] ${method} lỗi:`, error));
+}
+
+/** Trả lời lần bấm nút (tắt vòng xoay trên nút), có thể kèm thông báo nhỏ. */
+export const answerCallback = (env: Env, id: string, text?: string) => call(env, 'answerCallbackQuery', { callback_query_id: id, text });
+
+/** Gỡ nút khỏi tin nhắn cũ (để không bấm lại). */
+export const removeButtons = (env: Env, chatId: number, messageId: number) =>
+  call(env, 'editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } });

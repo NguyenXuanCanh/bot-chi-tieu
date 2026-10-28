@@ -338,3 +338,53 @@ export function matchPaylater(word: string): PaylaterKey | null {
   if (['khac', 'other'].includes(w)) return 'other';
   return null;
 }
+
+// ---------- Kỳ chi tiêu (tháng tính từ ngày nhận lương) ----------
+
+/** Cùng ngày tháng sau, tháng ngắn thì ngày cuối tháng: 2026-01-31 -> 2026-02-28. */
+export function sameDayNextMonth(day: string) {
+  const next = addMonths(monthOf(day), 1);
+  return `${next}-${String(Math.min(Number(day.slice(8, 10)), daysInMonth(next))).padStart(2, '0')}`;
+}
+
+export type Period = {
+  /** cycle: ngày bắt đầu "YYYY-MM-DD"; month: "YYYY-MM". */
+  key: string;
+  kind: 'cycle' | 'month';
+  from: string;
+  to: string;
+  /** Kỳ hiện tại chưa có kỳ sau: `to` là ngày dự kiến kết thúc (trước ngày lương tháng sau). */
+  open: boolean;
+  label: string;
+};
+
+export function monthPeriod(month: string): Period {
+  return {
+    key: month,
+    kind: 'month',
+    from: `${month}-01`,
+    to: `${month}-${String(daysInMonth(month)).padStart(2, '0')}`,
+    open: false,
+    label: `Tháng ${formatMonth(month)}`,
+  };
+}
+
+/**
+ * Các kỳ từ danh sách ngày bắt đầu (bấm nhận lương / bắt đầu tháng), mới nhất trước.
+ * Kỳ i kéo tới hết ngày trước kỳ sau; kỳ mới nhất dự kiến hết trước cùng ngày tháng sau (quá hạn mà chưa bắt đầu kỳ mới thì kéo tới hôm nay).
+ */
+export function cyclePeriods(starts: string[], today: string): Period[] {
+  const sorted = [...new Set(starts)].filter((s) => s <= today).sort().reverse();
+  return sorted.map((from, i) => {
+    const open = i === 0;
+    const expected = addDays(sameDayNextMonth(from), -1);
+    const to = open ? (expected < today ? today : expected) : addDays(sorted[i - 1], -1);
+    return { key: from, kind: 'cycle', from, to, open, label: `Kỳ ${formatDay(from)} → ${formatDay(to)}` };
+  });
+}
+
+/** Kỳ chứa ngày `day`: theo kỳ lương nếu có, không thì theo tháng lịch. */
+export function periodOf(starts: string[], day: string, today: string): Period {
+  const cycles = cyclePeriods(starts, today);
+  return cycles.find((p) => p.from <= day && day <= p.to) ?? monthPeriod(monthOf(day));
+}

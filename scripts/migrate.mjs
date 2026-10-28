@@ -7,6 +7,10 @@ import { spawnSync } from 'node:child_process';
 const MIGRATIONS = [
   // 2026-10: dư nợ trả sau có nhiều nguồn (thẻ, MoMo, ZaloPay, SPayLater).
   "ALTER TABLE credit_charges ADD COLUMN provider TEXT NOT NULL DEFAULT 'card'",
+  // 2026-10: lương có trạng thái chờ nhận / đã nhận. Thu nhập các tháng trước và thưởng coi như đã nhận lúc ghi;
+  // lương tháng hiện tại để chờ người dùng bấm "+lương".
+  'ALTER TABLE incomes ADD COLUMN received_at INTEGER',
+  "UPDATE incomes SET received_at = created_at WHERE received_at IS NULL AND (month < strftime('%Y-%m', 'now', '+7 hours') OR (note IS NOT NULL AND note NOT LIKE 'Lương%'))",
 ];
 
 const extra = process.argv.slice(2);

@@ -109,12 +109,22 @@ export type Expense = {
   trip_id: number | null;
   trip_city?: string | null;
 };
-export type Meta = { categories: string[]; cities: string[]; today: string; first: string | null; last: string | null };
+export type Meta = {
+  categories: string[];
+  cities: string[];
+  today: string;
+  first: string | null;
+  last: string | null;
+  period: Period;
+  previousPeriod: Period | null;
+};
 
 export type JarKey = 'bat_buoc' | 'tieu_xai' | 'game' | 'tiet_kiem';
 export type JarStatus = { key: JarKey; name: string; emoji: string; budget: number; spent: number };
 export type MonthStatus = {
   month: string;
+  period: Period;
+  pending: { id: number; amount: number; note: string | null }[];
   income: number;
   incomes: { id: number; amount: number; note: string | null }[];
   spent: number;
@@ -130,6 +140,7 @@ export type BudgetData = {
   mapping: Record<string, JarKey>;
   jars: { key: JarKey; name: string; emoji: string }[];
   categories: string[];
+  periods: { key: string; label: string }[];
 };
 
 export type Goal = { id: number; title: string; target: number; saved_before: number; start_month: string; deadline: string; plan_at: number | null };
@@ -170,19 +181,20 @@ export type Recurring = {
 
 export type CreditCharge = { id: number; amount: number; item: string; category: string; spent_on: string; settled: number; provider: string };
 
+export type Period = { key: string; kind: 'cycle' | 'month'; from: string; to: string; open: boolean; label: string };
+export type ForecastLine = { label: string; amount: number; day?: string; expected?: boolean };
+export type ForecastPeriod = { label: string; from: string; to: string; lines: ForecastLine[]; end: number };
+export type PendingIncome = { id: number; month: string; amount: number; note: string | null; created_at: number };
 export type Forecast = {
   balance: { snapshot: { id: number; amount: number; day: string; created_at: number }; incomeSince: number; spentSince: number; now: number };
-  month: string;
-  daysLeft: number;
+  period: Period;
   payday: number;
-  incomePending: { note: string; amount: number; day: number; expected: boolean }[];
-  fixedPending: { item: string; amount: number; day: number }[];
-  moreSpend: number;
-  moreSpendBasis: 'jars' | 'pace';
-  endOfMonth: number;
-  next: { month: string; income: number; creditDebt: number; spend: number; spendBasis: 'jars' | 'average'; end: number };
-  incomeThisMonthMissing: boolean;
+  current: ForecastPeriod;
+  next: ForecastPeriod;
+  pendingSalary: PendingIncome[];
+  salaryDue: { amount: number } | null;
 };
+export type SalaryState = { pending: PendingIncome[]; due: { amount: number } | null; period: Period; average: number };
 
 export type DashboardData = {
   today: string;

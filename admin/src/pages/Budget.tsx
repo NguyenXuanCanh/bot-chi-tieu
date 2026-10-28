@@ -4,16 +4,20 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { MoneyField, moneyText } from '../components/MoneyField';
 import { Button, Card, CardTitle, CategoryBadge, cx, ErrorBox, Field, Input, Select, Spinner, useToast } from '../components/ui';
 import { api, type BudgetData, type JarKey, type JarStatus, type MonthStatus } from '../lib/api';
-import { addMonths, JAR_STYLE, monthLabel, parseMoney, todayVn, vnd, vndShort } from '../lib/format';
+import { JAR_STYLE, parseMoney, vnd, vndShort } from '../lib/format';
 import { useApi } from '../lib/use-api';
 import { BalanceCard } from './BalanceCard';
 import { CreditCardSection } from './CreditCard';
 import { RecurringCard } from './RecurringCard';
+import { SalaryBanner } from './SalaryBanner';
 
 export default function BudgetPage() {
-  const current = todayVn().slice(0, 7);
-  const [month, setMonth] = useState(current);
-  const data = useApi(() => api<BudgetData>('/budget', { query: { month } }), `budget-${month}`);
+  // Kỳ đang xem: '' = kỳ hiện tại; kỳ = từ lần nhận lương (hoặc tháng lịch nếu chưa nhận lần nào).
+  const [periodKey, setPeriodKey] = useState('');
+  const data = useApi(() => api<BudgetData>('/budget', { query: { period: periodKey } }), `budget-${periodKey}`);
+  const periods = data.data?.periods ?? [];
+  const index = Math.max(0, periods.findIndex((p) => p.key === (periodKey || periods[0]?.key)));
+  const isCurrent = index === 0;
   // Tăng mỗi lần dữ liệu đổi để thẻ số dư tính lại.
   const [version, setVersion] = useState(0);
   const reload = () => {
@@ -29,23 +33,32 @@ export default function BudgetPage() {
           <p className="text-sm text-muted-foreground">Lương chia theo hũ, so với chi tiêu thực tế</p>
         </div>
         <div className="flex items-center gap-1 rounded-lg border border-border bg-card p-1">
-          <button className="rounded-md p-2 hover:bg-muted" onClick={() => setMonth(addMonths(month, -1))} aria-label="Tháng trước">
-            <ChevronLeft className="size-4" />
-          </button>
-          <span className="num min-w-24 text-center text-sm font-semibold">Tháng {monthLabel(month)}</span>
           <button
             className="rounded-md p-2 hover:bg-muted disabled:opacity-40"
-            onClick={() => setMonth(addMonths(month, 1))}
-            disabled={month >= current}
-            aria-label="Tháng sau">
+            onClick={() => setPeriodKey(periods[index + 1].key)}
+            disabled={index >= periods.length - 1}
+            aria-label="Kỳ trước">
+            <ChevronLeft className="size-4" />
+          </button>
+          <span className="num min-w-32 text-center text-sm font-semibold">{data.data?.status.period.label ?? '…'}</span>
+          <button
+            className="rounded-md p-2 hover:bg-muted disabled:opacity-40"
+            onClick={() => setPeriodKey(index <= 1 ? '' : periods[index - 1].key)}
+            disabled={isCurrent}
+            aria-label="Kỳ sau">
             <ChevronRight className="size-4" />
           </button>
         </div>
       </header>
 
+      <SalaryBanner key={`s${version}`} onReceived={() => {
+        setPeriodKey('');
+        reload();
+      }} />
+
       {data.error ? <ErrorBox message={data.error} onRetry={data.reload} /> : null}
       {!data.data && data.loading ? <Spinner /> : null}
-      {month === current ? <BalanceCard key={version} version={version} /> : null}
+      {isCurrent ? <BalanceCard key={version} version={version} /> : null}
       {data.data ? <BudgetBody data={data.data} reload={reload} /> : null}
     </div>
   );
@@ -79,7 +92,7 @@ function BudgetBody({ data, reload }: { data: BudgetData; reload: () => void }) 
             ))}
           </ul>
         </Card>
-        <ReviewCard month={s.month} />
+        <ReviewCard period={s.period.key} />
       </div>
 
       <div className="grid gap-4 md:gap-6 xl:grid-cols-2">
@@ -149,7 +162,7 @@ function JarRow({ jar, status }: { jar: JarStatus; status: MonthStatus }) {
         ) : null}
       </div>
       {over ? <p className="mt-1 text-xs font-medium text-destructive">Vượt {vnd(jar.spent - jar.budget)}</p> : null}
-      {ahead ? <p className="mt-1 text-xs font-medium text-accent">Đang tiêu nhanh hơn số ngày đã qua ({Math.round(pace * 100)}% tháng)</p> : null}
+      {ahead ? <p className="mt-1 text-xs font-medium text-accent">Đang tiêu nhanh hơn số ngày đã qua ({Math.round(pace * 100)}% kỳ)</p> : null}
       {saving && jar.budget > 0 && status.saved !== null && status.saved < jar.budget ? (
         <p className="mt-1 text-xs text-muted-foreground">Còn thiếu {vnd(jar.budget - Math.max(0, status.saved))} so với mức muốn để dành</p>
       ) : null}
@@ -157,16 +170,16 @@ function JarRow({ jar, status }: { jar: JarStatus; status: MonthStatus }) {
   );
 }
 
-function ReviewCard({ month }: { month: string }) {
+function ReviewCard({ period }: { period: string }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => setText(''), [month]);
+  useEffect(() => setText(''), [period]);
   const run = async () => {
     setBusy(true);
     setError('');
     try {
-      setText((await api<{ text: string }>('/budget/review', { method: 'POST', body: { month } })).text);
+      setText((await api<{ text: string }>('/budget/review', { method: 'POST', body: { period } })).text);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -197,6 +210,7 @@ function IncomeCard({ status, onChanged }: { status: MonthStatus; onChanged: () 
   const toast = useToast();
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('Lương');
+  const [later, setLater] = useState(false);
   const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -204,9 +218,9 @@ function IncomeCard({ status, onChanged }: { status: MonthStatus; onChanged: () 
     if (!value) return toast('Số tiền không hợp lệ', 'error');
     setBusy(true);
     try {
-      await api('/incomes', { method: 'POST', body: { month: status.month, amount: value, note } });
+      const result = await api<{ started?: unknown }>('/incomes', { method: 'POST', body: { amount: value, note, received: !later } });
       setAmount('');
-      toast('Đã thêm thu nhập');
+      toast(later ? 'Đã ghi lương chờ nhận' : result?.started ? 'Đã cộng lương, bắt đầu tháng mới từ hôm nay' : 'Đã thêm thu nhập');
       onChanged();
     } catch (err) {
       toast((err as Error).message, 'error');
@@ -225,7 +239,7 @@ function IncomeCard({ status, onChanged }: { status: MonthStatus; onChanged: () 
   };
   return (
     <Card>
-      <CardTitle>Thu nhập tháng {monthLabel(status.month)}</CardTitle>
+      <CardTitle>Thu nhập · {status.period.label}</CardTitle>
       {status.incomes.length ? (
         <ul className="mb-4 divide-y divide-border rounded-lg border border-border">
           {status.incomes.map((i) => (
@@ -243,12 +257,33 @@ function IncomeCard({ status, onChanged }: { status: MonthStatus; onChanged: () 
       ) : (
         <p className="mb-4 text-sm text-muted-foreground">Chưa có. Trên bot gõ <code>/luong 25tr</code> hoặc thêm ở đây.</p>
       )}
+      {status.pending.length ? (
+        <ul className="mb-4 divide-y divide-border rounded-lg border border-dashed border-emerald-300 bg-emerald-50/50">
+          {status.pending.map((i) => (
+            <li key={i.id} className="flex items-center justify-between gap-3 px-3 py-2">
+              <span>
+                {i.note || 'Lương'} <span className="text-xs text-emerald-800">· chờ nhận</span>
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="num font-semibold">{vnd(i.amount)}</span>
+                <button onClick={() => remove(i.id)} className="rounded-md p-2 text-muted-foreground hover:bg-red-50 hover:text-destructive" aria-label={`Xóa ${i.note ?? ''}`}>
+                  <Trash2 className="size-4" />
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <form onSubmit={submit} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-start">
         <MoneyField label="Số tiền" value={amount} onChange={setAmount} required />
         <Field label="Ghi chú">{(id) => <Input id={id} value={note} onChange={(e) => setNote(e.target.value)} maxLength={60} />}</Field>
         <Button type="submit" loading={busy} className="sm:mt-[26px]">
           <Plus className="size-4" aria-hidden /> Thêm
         </Button>
+        <label className="flex items-start gap-2 text-sm sm:col-span-3">
+          <input type="checkbox" className="mt-1 size-4 accent-primary" checked={later} onChange={(e) => setLater(e.target.checked)} />
+          <span>Chưa về, ghi trước (chờ nhận). Không chọn: cộng ngay vào số dư; nếu là lương thì hôm nay thành đầu tháng mới.</span>
+        </label>
       </form>
     </Card>
   );

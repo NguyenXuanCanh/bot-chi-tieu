@@ -17,8 +17,10 @@ import {
   monthOf,
   monthsBetween,
   SPEND_JARS,
+  monthPeriod,
   type Category,
   type JarKey,
+  type Period,
 } from './core';
 
 /**
@@ -57,10 +59,11 @@ export async function setJarBudgets(env: Env, chat: number, amounts: Partial<Rec
   );
 }
 
-export async function addIncome(env: Env, chat: number, month: string, amount: number, note: string | null) {
-  await env.DB.prepare('INSERT INTO incomes (chat_id, month, amount, note, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(chat, month, amount, note, Date.now())
-    .run();
+/** Ghi thu nhập. received = false: lương chờ nhận (bấm "+lương" mới cộng vào số dư và bắt đầu tháng mới). */
+export async function addIncome(env: Env, chat: number, month: string, amount: number, note: string | null, received = true) {
+  return env.DB.prepare('INSERT INTO incomes (chat_id, month, amount, note, created_at, received_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id')
+    .bind(chat, month, amount, note, Date.now(), received ? Date.now() : null)
+    .first<{ id: number }>();
 }
 
 // ---------- Tình hình một tháng ----------
@@ -68,6 +71,9 @@ export async function addIncome(env: Env, chat: number, month: string, amount: n
 export type JarStatus = { key: JarKey; name: string; emoji: string; budget: number; spent: number };
 export type MonthStatus = {
   month: string;
+  period: Period;
+  /** Lương đã ghi nhưng chưa bấm nhận (chưa cộng vào thu nhập / số dư). */
+  pending: { id: number; amount: number; note: string | null }[];
   income: number;
   incomes: { id: number; amount: number; note: string | null }[];
   spent: number;
@@ -81,11 +87,22 @@ export type MonthStatus = {
   daysPassed: number;
 };
 
-export async function monthStatus(env: Env, chat: number, month: string, today: string): Promise<MonthStatus> {
-  const from = `${month}-01`;
-  const to = `${month}-${String(daysInMonth(month)).padStart(2, '0')}`;
+/** Tình hình một tháng lịch (tổng kết theo tháng, kỳ trước khi có kỳ lương). */
+export const monthStatus = (env: Env, chat: number, month: string, today: string) => periodStatus(env, chat, monthPeriod(month), today);
+
+/**
+ * Tình hình một kỳ: kỳ lương (từ lúc bấm nhận lương) hoặc tháng lịch.
+ * Thu nhập chỉ tính khoản đã nhận; lương chờ nhận nằm riêng ở `pending`.
+ */
+export async function periodStatus(env: Env, chat: number, period: Period, today: string): Promise<MonthStatus> {
+  const { from, to } = period;
   const [incomes, cats, top] = await env.DB.batch([
-    env.DB.prepare('SELECT id, amount, note FROM incomes WHERE chat_id = ? AND month = ? ORDER BY id').bind(chat, month),
+    period.kind === 'cycle'
+      ? env.DB.prepare(
+          `SELECT id, amount, note FROM incomes WHERE chat_id = ? AND received_at IS NOT NULL
+             AND date(received_at / 1000, 'unixepoch', '+7 hours') BETWEEN ? AND ? ORDER BY id`,
+        ).bind(chat, from, to)
+      : env.DB.prepare('SELECT id, amount, note FROM incomes WHERE chat_id = ? AND month = ? AND received_at IS NOT NULL ORDER BY id').bind(chat, period.key),
     env.DB.prepare('SELECT category, SUM(amount) AS total FROM expenses WHERE chat_id = ? AND spent_on BETWEEN ? AND ? GROUP BY category ORDER BY total DESC').bind(
       chat,
       from,
@@ -107,10 +124,14 @@ export async function monthStatus(env: Env, chat: number, month: string, today: 
     // Hũ tiết kiệm "chi" = số tiền thực sự còn dư trong tháng.
     spent: j.key === 'tiet_kiem' ? Math.max(0, income - spent) : byCategory.filter((c) => c.jar === j.key).reduce((s, c) => s + c.total, 0),
   }));
-  const current = monthOf(today);
-  const total = daysInMonth(month);
+  const total = daysBetween(from, to) + 1;
+  const pending = await env.DB.prepare('SELECT id, amount, note FROM incomes WHERE chat_id = ? AND received_at IS NULL ORDER BY id')
+    .bind(chat)
+    .all<{ id: number; amount: number; note: string | null }>();
   return {
-    month,
+    month: monthOf(from),
+    period,
+    pending: pending.results,
     income,
     incomes: incomes.results as MonthStatus['incomes'],
     spent,
@@ -119,7 +140,7 @@ export async function monthStatus(env: Env, chat: number, month: string, today: 
     byCategory,
     topItems: top.results as MonthStatus['topItems'],
     daysInMonth: total,
-    daysPassed: month < current ? total : month > current ? 0 : Number(today.slice(8, 10)),
+    daysPassed: Math.max(0, Math.min(total, daysBetween(from, today) + 1)),
   };
 }
 
@@ -135,7 +156,7 @@ export function jarLine(j: JarStatus) {
 
 function monthFacts(s: MonthStatus) {
   return [
-    `Tháng ${formatMonth(s.month)}, đã qua ${s.daysPassed}/${s.daysInMonth} ngày.`,
+    `${s.period.label}, đã qua ${s.daysPassed}/${s.daysInMonth} ngày.`,
     `Thu nhập: ${s.income ? formatVnd(s.income) : 'chưa nhập'}. Đã chi: ${formatVnd(s.spent)}.${s.saved !== null ? ` Còn dư: ${formatVnd(s.saved)}.` : ''}`,
     'Các hũ (đã chi / mức đặt / % dùng):',
     ...s.jars.filter((j) => j.key !== 'tiet_kiem').map((j) => `- ${j.name}: ${formatVnd(j.spent)} / ${j.budget ? formatVnd(j.budget) : 'chưa đặt'}${j.budget ? ` / ${pct(j.spent, j.budget)}%` : ''}`),
@@ -162,7 +183,7 @@ export async function jarWarning(env: Env, s: MonthStatus, j: JarStatus, level: 
   const left = s.daysInMonth - s.daysPassed;
   const prompt = `Bạn là trợ lý tài chính cá nhân, nói tiếng Việt thân mật, thẳng thắn, không phán xét.
 Người dùng vừa ghi: ${justAdded}.
-Hũ "${j.name}" ${level === 100 ? `đã VƯỢT mức: chi ${formatVnd(j.spent)} / mức ${formatVnd(j.budget)}` : `đã dùng ${pct(j.spent, j.budget)}%: ${formatVnd(j.spent)} / ${formatVnd(j.budget)}`}, tháng còn ${left} ngày.
+Hũ "${j.name}" ${level === 100 ? `đã VƯỢT mức: chi ${formatVnd(j.spent)} / mức ${formatVnd(j.budget)}` : `đã dùng ${pct(j.spent, j.budget)}%: ${formatVnd(j.spent)} / ${formatVnd(j.budget)}`}, kỳ này còn ${left} ngày.
 
 ${monthFacts(s)}
 
@@ -181,14 +202,14 @@ Viết đúng 2 câu ngắn (tối đa 260 ký tự, không markdown, không emo
 
 /** AI đánh giá cả tháng (lệnh /danhgia và nút trên trang admin). */
 export async function reviewMonth(env: Env, s: MonthStatus) {
-  if (s.spent === 0 && s.income === 0) return 'Tháng này chưa có dữ liệu thu chi để đánh giá.';
+  if (s.spent === 0 && s.income === 0) return 'Kỳ này chưa có dữ liệu thu chi để đánh giá.';
   const prompt = `Bạn là trợ lý tài chính cá nhân, nói tiếng Việt thân mật, thẳng thắn.
 Đánh giá việc chi tiêu theo hũ của người dùng dựa trên số liệu sau (đã tính sẵn, KHÔNG tự tính lại số khác):
 
 ${monthFacts(s)}
 
 Viết tối đa 8 dòng, viết số tiền dạng 850k, 1,2tr và phần trăm dạng 85%, không markdown (không dùng ** hay #), mỗi ý một dòng bắt đầu bằng "• ":
-- Hũ nào vượt hoặc sắp vượt mức (so với số ngày đã qua: dùng ${pct(s.daysPassed, s.daysInMonth)}% thời gian của tháng), hũ nào đang ổn.
+- Hũ nào vượt hoặc sắp vượt mức (so với số ngày đã qua: dùng ${pct(s.daysPassed, s.daysInMonth)}% thời gian của kỳ), hũ nào đang ổn.
 - ${s.income ? 'Có đạt mục tiêu tiết kiệm của tháng không (so phần còn dư với mức muốn để dành).' : 'Chưa nhập lương nên chưa biết tiết kiệm được bao nhiêu: nhắc nhập bằng lệnh /luong.'}
 - 2-3 gợi ý cụ thể, nêu tên khoản chi thật trong dữ liệu.`;
   return askText(env, prompt, 'review');

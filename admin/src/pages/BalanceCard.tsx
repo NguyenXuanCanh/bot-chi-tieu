@@ -4,7 +4,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { MoneyField } from '../components/MoneyField';
 import { Button, Card, cx, ErrorBox, Spinner, useToast } from '../components/ui';
 import { api, type Forecast } from '../lib/api';
-import { dayLabel, monthLabel, parseMoney, vnd, vndShort } from '../lib/format';
+import { dayLabel, parseMoney, vnd, vndShort } from '../lib/format';
 import { useApi } from '../lib/use-api';
 
 /** Số dư đang có + dự báo cuối tháng này và cuối tháng sau. `version` đổi khi dữ liệu ngân sách đổi để tải lại. */
@@ -66,28 +66,18 @@ export function BalanceCard({ version }: { version: number }) {
 
         {f ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            <Projection
-              title={`Cuối tháng ${monthLabel(f.month)}`}
-              sub={`còn ${f.daysLeft} ngày`}
-              total={f.endOfMonth}
-              rows={[
-                ...f.incomePending.map((r) => ({ label: `${r.note} (ngày ${r.day})${r.expected ? ', chưa nhập' : ''}`, value: r.amount })),
-                ...f.fixedPending.map((r) => ({ label: `${r.item} (cố định, ngày ${r.day})`, value: -r.amount })),
-                { label: f.moreSpendBasis === 'jars' ? 'Chi tiếp (phần còn lại của các hũ)' : 'Chi tiếp (theo mức chi mỗi ngày)', value: -f.moreSpend },
-              ]}
-            />
-            <Projection
-              title={`Cuối tháng ${monthLabel(f.next.month)}`}
-              total={f.next.end}
-              rows={[
-                { label: f.next.income ? `Lương ngày ${f.payday}/${Number(f.next.month.slice(5))} (TB các tháng)` : 'Lương (chưa nhập tháng nào)', value: f.next.income },
-                ...(f.next.creditDebt ? [{ label: `Trả dư nợ trả sau (ngày 1/${Number(f.next.month.slice(5))})`, value: -f.next.creditDebt }] : []),
-                { label: f.next.spendBasis === 'jars' ? 'Chi theo hũ' : 'Chi như tháng này', value: -f.next.spend },
-              ]}
-            />
-            {f.incomeThisMonthMissing ? (
-              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:col-span-2">
-                Đã qua ngày lương ({f.payday}) mà tháng này chưa nhập lương. Nhận rồi thì thêm thu nhập để số dư cộng vào.
+            {[f.current, f.next].map((p, i) => (
+              <Projection
+                key={p.label}
+                title={p.label}
+                sub={i === 0 ? `còn ${Math.max(0, Math.round((Date.parse(p.to) - Date.parse(p.from)) / 86_400_000))} ngày` : undefined}
+                total={p.end}
+                rows={p.lines.map((l) => ({ label: `${l.label}${l.day ? ` (ngày ${dayLabel(l.day)})` : ''}`, value: l.amount }))}
+              />
+            ))}
+            {f.pendingSalary.length ? (
+              <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900 sm:col-span-2">
+                Lương chưa cộng vào số dư cho tới khi bạn bấm nhận (thanh màu xanh phía trên).
               </p>
             ) : null}
           </div>

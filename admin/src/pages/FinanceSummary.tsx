@@ -26,7 +26,7 @@ export function FinanceSummary() {
             <>
               <Big tone={f.balance.now < 0 ? 'bad' : undefined}>{vnd(f.balance.now)}</Big>
               <Hint>
-                Cuối tháng ≈ <b className="num">{vndShort(f.endOfMonth)}</b> · tháng {monthLabel(f.next.month)} ≈ <b className="num">{vndShort(f.next.end)}</b>
+                {f.current.label} ≈ <b className="num">{vndShort(f.current.end)}</b> · {f.next.label.toLowerCase()} ≈ <b className="num">{vndShort(f.next.end)}</b>
               </Hint>
             </>
           ) : (
@@ -34,7 +34,7 @@ export function FinanceSummary() {
           )}
         </Tile>
 
-        <Tile icon={PiggyBank} label={`Tháng ${monthLabel(s.month)} còn dư`} to="/budget">
+        <Tile icon={PiggyBank} label={`${s.period.label} còn dư`} to="/budget">
           {s.saved !== null ? (
             <>
               <Big tone={s.saved < 0 ? 'bad' : 'good'}>{vnd(s.saved)}</Big>
@@ -43,7 +43,7 @@ export function FinanceSummary() {
               </Hint>
             </>
           ) : (
-            <Empty>Chưa nhập lương tháng này (bot: /luong 25tr)</Empty>
+            <Empty>Chưa nhận lương kỳ này (bot: /luong 25tr)</Empty>
           )}
         </Tile>
 
@@ -86,7 +86,7 @@ export function FinanceSummary() {
       <div className="grid gap-4 md:gap-6 lg:grid-cols-5">
         <Card className="lg:col-span-3">
           <CardTitle extra={<MoreLink to="/budget">Ngân sách</MoreLink>}>
-            Các hũ tháng {monthLabel(s.month)} <span className="hidden text-sm font-normal text-muted-foreground sm:inline">· đã qua {s.daysPassed}/{s.daysInMonth} ngày</span>
+            Các hũ · {s.period.label} <span className="hidden text-sm font-normal text-muted-foreground sm:inline">· đã qua {s.daysPassed}/{s.daysInMonth} ngày</span>
           </CardTitle>
           {jarsSet ? (
             <ul className="flex flex-col gap-3.5">

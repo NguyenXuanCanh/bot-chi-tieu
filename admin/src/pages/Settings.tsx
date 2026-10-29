@@ -5,6 +5,7 @@ import { Button, Card, CardTitle, ErrorBox, Field, Input, Spinner, useToast } fr
 import { api, downloadCsv } from '../lib/api';
 import { useApi } from '../lib/use-api';
 import { AccountSection } from './AccountSettings';
+import { InstallCard } from './InstallCard';
 
 export default function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const toast = useToast();
@@ -60,6 +61,7 @@ export default function SettingsPage({ onLogout }: { onLogout: () => void }) {
   return (
     <div className="flex max-w-3xl flex-col gap-4">
       <h1 className="text-2xl font-semibold">Cài đặt</h1>
+      <InstallCard />
       <AccountSection />
       <Card>
         <CardTitle>Thành phố nhà</CardTitle>

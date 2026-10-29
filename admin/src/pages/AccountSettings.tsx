@@ -197,6 +197,7 @@ const GUIDE: { group: string; rows: [string, string][] }[] = [
       ['/the tra · /the tra momo · /the tra 2tr', 'Thanh toán sớm dư nợ trả sau: hết / một nguồn / một phần, thành chi tiêu hôm nay'],
       ['(reply tin bot) 60k / ăn uống / hôm qua / xóa', 'Sửa nhanh khoản vừa ghi'],
       ['/xoa', 'Xóa khoản vừa ghi'],
+      ['cho Nam mượn 500k hẹn 15/11 · vay Hùng 2tr', 'Ghi sổ nợ (không tính là chi tiêu); khi trả: Nam trả 200k · trả Hùng 1tr · /no xem sổ nợ'],
     ],
   },
   {

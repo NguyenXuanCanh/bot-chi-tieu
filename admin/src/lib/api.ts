@@ -73,7 +73,7 @@ export async function downloadCsv() {
 // ---------- Kiểu dữ liệu từ API ----------
 
 export type CategoryTotal = { category: string; total: number; count: number };
-export type DayTotal = { day: string; total: number; travel?: number };
+export type DayTotal = { day: string; total: number; travel?: number; count?: number };
 export type TripRow = {
   id: number;
   city: string;

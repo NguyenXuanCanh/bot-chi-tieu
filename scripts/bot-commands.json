@@ -1,22 +1,86 @@
 [
-  { "command": "sodu", "description": "Số dư: còn bao nhiêu, cuối tháng & tháng sau còn bao nhiêu" },
-  { "command": "hu", "description": "Xem các hũ tháng này" },
-  { "command": "luong", "description": "Ghi lương: /luong 25tr" },
-  { "command": "ngayluong", "description": "Ngày nhận lương hằng tháng (mặc định 27)" },
-  { "command": "chiahu", "description": "Chia hũ: /chiahu 10tr 6tr 1tr 8tr" },
-  { "command": "danhgia", "description": "AI đánh giá chi tiêu tháng này" },
-  { "command": "tongket", "description": "Tổng kết tháng trước (/tongket 10 cho tháng 10)" },
-  { "command": "muctieu", "description": "Mục tiêu tiết kiệm" },
-  { "command": "codinh", "description": "Chi cố định hàng tháng: /codinh tiền nhà 5tr ngày 5" },
-  { "command": "the", "description": "Dư nợ trả sau: thẻ (td …), MoMo/ZaloPay/SPay (ts momo …), /the tra trả sớm" },
-  { "command": "homnay", "description": "Chi tiêu hôm nay" },
-  { "command": "tuan", "description": "7 ngày qua" },
-  { "command": "thang", "description": "Tháng này" },
-  { "command": "chuyendi", "description": "Các chuyến đi" },
-  { "command": "dulich", "description": "Bật chế độ du lịch: /dulich Đà Lạt" },
-  { "command": "venha", "description": "Kết thúc chuyến đi" },
-  { "command": "hoi", "description": "Hỏi về chi tiêu" },
-  { "command": "xoa", "description": "Xóa khoản vừa ghi" },
-  { "command": "nhac", "description": "Bật/tắt nhắc ghi chi tiêu lúc 21h" },
-  { "command": "help", "description": "Hướng dẫn" }
+  {
+    "command": "sodu",
+    "description": "Số dư: còn bao nhiêu, cuối tháng & tháng sau còn bao nhiêu"
+  },
+  {
+    "command": "hu",
+    "description": "Xem các hũ tháng này"
+  },
+  {
+    "command": "luong",
+    "description": "Ghi lương: /luong 25tr"
+  },
+  {
+    "command": "ngayluong",
+    "description": "Ngày nhận lương hằng tháng (mặc định 27)"
+  },
+  {
+    "command": "chiahu",
+    "description": "Chia hũ: /chiahu 10tr 6tr 1tr 8tr"
+  },
+  {
+    "command": "danhgia",
+    "description": "AI đánh giá chi tiêu tháng này"
+  },
+  {
+    "command": "tongket",
+    "description": "Tổng kết tháng trước (/tongket 10 cho tháng 10)"
+  },
+  {
+    "command": "muctieu",
+    "description": "Mục tiêu tiết kiệm"
+  },
+  {
+    "command": "codinh",
+    "description": "Chi cố định hàng tháng: /codinh tiền nhà 5tr ngày 5"
+  },
+  {
+    "command": "the",
+    "description": "Dư nợ trả sau: thẻ (td …), MoMo/ZaloPay/SPay (ts momo …), /the tra trả sớm"
+  },
+  {
+    "command": "no",
+    "description": "Sổ nợ: ai nợ ai (cho Nam mượn 500k, Nam trả 200k)"
+  },
+  {
+    "command": "homnay",
+    "description": "Chi tiêu hôm nay"
+  },
+  {
+    "command": "tuan",
+    "description": "7 ngày qua"
+  },
+  {
+    "command": "thang",
+    "description": "Tháng này"
+  },
+  {
+    "command": "chuyendi",
+    "description": "Các chuyến đi"
+  },
+  {
+    "command": "dulich",
+    "description": "Bật chế độ du lịch: /dulich Đà Lạt"
+  },
+  {
+    "command": "venha",
+    "description": "Kết thúc chuyến đi"
+  },
+  {
+    "command": "hoi",
+    "description": "Hỏi về chi tiêu"
+  },
+  {
+    "command": "xoa",
+    "description": "Xóa khoản vừa ghi"
+  },
+  {
+    "command": "nhac",
+    "description": "Bật/tắt nhắc ghi chi tiêu lúc 21h"
+  },
+  {
+    "command": "help",
+    "description": "Hướng dẫn"
+  }
 ]

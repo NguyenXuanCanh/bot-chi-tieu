@@ -1,6 +1,6 @@
 import { handleAdmin } from './admin';
 import { getPayday } from './prefs';
-import { periodReport, remindIdle, remindPayday, sendMonthlyReports, setPref } from './reports';
+import { periodReport, remindDebts, remindIdle, remindPayday, sendMonthlyReports, setPref } from './reports';
 import { isAllowedChat } from './accounts';
 import { answerCallback, downloadFile, esc, removeButtons, send, typing, type Buttons } from './telegram';
 import { isSalary, listPeriods, periodFor, receiveIncome, salaryState } from './period';
@@ -47,6 +47,7 @@ import {
   monthPeriod,
   plain,
   parseAmount,
+  parseDebt,
   parseGoal,
   sameCity,
   takeAmount,
@@ -57,6 +58,7 @@ import {
   type Period,
 } from './core';
 import { forecast, setBalance, type Forecast, type ForecastLine } from './balance';
+import { addDebt, debtTotals, deleteDebt, getDebt, listDebts, openDebtsWith, payDebt, payPerson, type Debt } from './debts';
 import { addCharges, billedMonth, payEarly, pendingCharges, settleCredit, type CreditCharge } from './credit';
 import { addRecurring, chargeOne, dueDay, listRecurring, recurringTotal, runRecurring, type Recurring } from './recurring';
 
@@ -92,6 +94,10 @@ const HELP = `👋 Ghi chi tiêu bằng cách nhắn như bình thường:
 • <code>bánh căn 60k ở Đà Lạt</code> hoặc <code>@Hội An: cao lầu 50k</code>
 • <code>/dulich Đà Lạt</code> — mọi khoản sau đó tính vào chuyến (không cần ghi nơi), <code>/venha</code> để kết thúc
 • <code>/nha TP.HCM</code> — thành phố nhà (chi ở đây không tính là du lịch)
+
+📒 <b>Sổ nợ</b> (không tính là chi tiêu, có cộng/trừ số dư)
+• <code>cho Nam mượn 500k hẹn 15/11</code> · <code>vay Hùng 2tr</code> · <code>Hùng cho mượn 2tr</code>
+• <code>Nam trả 200k</code> · <code>trả Hùng 1tr</code> · <code>Nam trả hết</code> · <code>/no</code> xem sổ nợ
 
 🫙 <b>Lương & hũ</b>
 • <code>/luong 25tr</code> — ghi lương (chờ nhận); lương về thì bấm nút <b>+25tr</b>: cộng vào số dư và hôm đó là <b>đầu tháng mới</b>
@@ -163,6 +169,7 @@ export default {
         for (const [chatId, rows] of await runRecurring(env, today)) await send(env, chatId, chargedMessage(rows));
         await sendMonthlyReports(env, today);
         await remindPayday(env, today);
+        await remindDebts(env, today);
       })().catch((error) => console.error('[cron] lỗi:', error)),
     );
   },
@@ -261,6 +268,8 @@ async function handle(env: Env, message: TgMessage, origin: string) {
       return goal(env, chatId, arg, today);
     case '/codinh':
       return fixed(env, chatId, arg, today);
+    case '/no':
+      return debtCommand(env, chatId, arg, today);
     case '/the':
     case '/trasau':
       return credit(env, chatId, arg, message.message_id, cmd === '/trasau' ? 'other' : 'card');
@@ -309,6 +318,8 @@ async function handle(env: Env, message: TgMessage, origin: string) {
         const bal = text.match(/^(?:số dư|so du|sodu|đang có|hiện có|tiền hiện có|còn bao nhiêu)\s*[:\-]?\s*(.*?)\??$/i);
         if (bal && (!bal[1] || takeAmount(bal[1], 0))) return balance(env, chatId, bal[1], today);
       }
+      // Sổ nợ: "cho Nam mượn 500k", "vay Hùng 2tr", "Nam trả 200k", "trả Hùng 1tr" (trả chỉ khi có nợ với người đó).
+      if (await debtMessage(env, chatId, text, message.message_id, today)) return;
       // Trả sớm: "trả thẻ 2tr" (chỉ thẻ tín dụng), "trả nợ momo", "trả dư nợ trả sau" (tất cả).
       {
         // (?=\s|$) thay cho \b vì \b của JS không coi chữ có dấu (ẻ, ợ) là chữ.
@@ -721,6 +732,7 @@ async function handleButton(env: Env, q: TgCallback) {
   }
   const today = vnDate(Date.now());
   const [kind, value] = (q.data ?? '').split(':');
+  if (kind === 'debt') return debtButton(env, chatId, q, Number(value), today);
   const target = kind === 'inc' ? { incomeId: Number(value) } : kind === 'sal' ? { amount: Number(value) } : null;
   if (!target || !Object.values(target).every((n) => Number.isInteger(n) && n > 0)) return answerCallback(env, q.id);
   const result = await receiveIncome(env, chatId, today, target);
@@ -884,8 +896,8 @@ function forecastMessage(f: Forecast) {
     `  ${l.amount >= 0 ? '+' : '−'} ${esc(l.label)}${l.day ? ` (ngày ${formatDay(l.day)})` : ''}: ${formatVnd(Math.abs(l.amount))}`;
   const lines = [
     `💵 <b>Đang có: ${formatVndFull(b.now)}</b>`,
-    b.incomeSince || b.spentSince
-      ? `<i>(nhập ${formatVnd(b.snapshot.amount)} ngày ${formatDay(b.snapshot.day)}${b.incomeSince ? ` + thu ${formatVnd(b.incomeSince)}` : ''}${b.spentSince ? ` − chi ${formatVnd(b.spentSince)}` : ''})</i>`
+    b.incomeSince || b.spentSince || b.debtSince
+      ? `<i>(nhập ${formatVnd(b.snapshot.amount)} ngày ${formatDay(b.snapshot.day)}${b.incomeSince ? ` + thu ${formatVnd(b.incomeSince)}` : ''}${b.spentSince ? ` − chi ${formatVnd(b.spentSince)}` : ''}${b.debtSince ? ` ${b.debtSince > 0 ? '+' : '−'} sổ nợ ${formatVnd(Math.abs(b.debtSince))}` : ''})</i>`
       : `<i>(nhập ngày ${formatDay(b.snapshot.day)})</i>`,
   ];
   for (const p of [f.current, f.next]) {
@@ -894,6 +906,107 @@ function forecastMessage(f: Forecast) {
   if (f.pendingSalary.length) lines.push('', '<i>Lương chưa cộng vào số dư cho tới khi bạn bấm nút nhận bên dưới.</i>');
   else if (f.salaryDue) lines.push('', '<i>Đã tới ngày lương. Lương về rồi thì bấm nút dưới (số khác thì gõ /luong 32tr).</i>');
   return lines.join('\n');
+}
+
+// ---------- Sổ nợ ----------
+
+const owesLine = (d: Debt, today: string) =>
+  `• ${esc(d.person)}: <b>${formatVnd(d.remaining)}</b>${d.paid ? ` <i>(đã trả ${formatVnd(d.paid)})</i>` : ''}${
+    d.due_on ? (d.due_on < today ? ` ⚠️ quá hạn ${formatDay(d.due_on)}` : ` · hẹn ${formatDay(d.due_on)}`) : ''
+  }${d.note ? ` · ${esc(d.note)}` : ''}`;
+
+/** Câu sổ nợ trong tin nhắn thường. Trả về true nếu đã xử lý (false = để ghi như chi tiêu). */
+async function debtMessage(env: Env, chatId: number, text: string, messageId: number, today: string) {
+  const intent = parseDebt(text, today);
+  if (!intent) return false;
+  const { kind, person, amount, due, note } = intent;
+  if (kind === 'lend' || kind === 'borrow') {
+    await addDebt(env, chatId, { direction: kind, person, amount: amount!, note, start_on: today, due_on: due, message_id: messageId });
+    const total = (await openDebtsWith(env, chatId, kind, person)).reduce((s, d) => s + d.remaining, 0);
+    await send(
+      env,
+      chatId,
+      [
+        kind === 'lend'
+          ? `🤝 Đã ghi: <b>${esc(person)}</b> nợ bạn <b>${formatVnd(amount!)}</b>${due ? ` · hẹn trả ${formatDay(due)}` : ''}`
+          : `🤝 Đã ghi: bạn nợ <b>${esc(person)}</b> <b>${formatVnd(amount!)}</b>${due ? ` · hẹn trả ${formatDay(due)}` : ''}`,
+        total !== amount ? (kind === 'lend' ? `Tổng ${esc(person)} đang nợ bạn: <b>${formatVnd(total)}</b>` : `Tổng bạn đang nợ ${esc(person)}: <b>${formatVnd(total)}</b>`) : '',
+        `<i>${kind === 'lend' ? 'Đã trừ' : 'Đã cộng'} ${formatVnd(amount!)} ${kind === 'lend' ? 'khỏi' : 'vào'} số dư (không tính là chi tiêu). Nợ cũ từ trước thì sửa trên trang Sổ nợ.</i>`,
+        due ? '' : '<i>Thêm hẹn trả: ghi kèm "hẹn 15/11" để bot nhắc đúng ngày.</i>',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+    return true;
+  }
+  // Trả nợ: chỉ khi đang có khoản nợ mở với người đó.
+  const direction = kind === 'repaid' ? 'lend' : 'borrow';
+  if (!(await openDebtsWith(env, chatId, direction, person)).length) return false;
+  const r = await payPerson(env, chatId, direction, person, amount, today);
+  await send(
+    env,
+    chatId,
+    [
+      kind === 'repaid' ? `✅ <b>${esc(person)}</b> trả bạn <b>${formatVnd(r.paid)}</b>` : `✅ Bạn trả <b>${esc(person)}</b> <b>${formatVnd(r.paid)}</b>`,
+      r.remaining
+        ? kind === 'repaid'
+          ? `${esc(person)} còn nợ bạn: <b>${formatVnd(r.remaining)}</b>`
+          : `Bạn còn nợ ${esc(person)}: <b>${formatVnd(r.remaining)}</b>`
+        : '🎉 Đã trả hết.',
+      r.overpaid ? `<i>Dư ${formatVnd(r.overpaid)} so với số còn nợ, phần dư không được ghi.</i>` : '',
+      `<i>${kind === 'repaid' ? 'Đã cộng vào' : 'Đã trừ khỏi'} số dư.</i>`,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+  return true;
+}
+
+/** /no: xem sổ nợ · /no xoa: xóa khoản vừa ghi. */
+async function debtCommand(env: Env, chatId: number, arg: string, today: string) {
+  if (/^(xoa|xóa)$/i.test(arg)) {
+    const last = await env.DB.prepare('SELECT id, person, amount FROM debts WHERE chat_id = ? ORDER BY id DESC LIMIT 1')
+      .bind(chatId)
+      .first<{ id: number; person: string; amount: number }>();
+    if (!last) return send(env, chatId, 'Sổ nợ đang trống.');
+    await deleteDebt(env, chatId, last.id);
+    return send(env, chatId, `🗑️ Đã xóa khoản nợ ${esc(last.person)} ${formatVnd(last.amount)} (kèm các lần trả).`);
+  }
+  const debts = await listDebts(env, chatId);
+  if (!debts.length) {
+    return send(env, chatId, '📒 Sổ nợ trống. Ghi: <code>cho Nam mượn 500k hẹn 15/11</code> hoặc <code>vay Hùng 2tr</code>');
+  }
+  const t = debtTotals(debts);
+  const lend = debts.filter((d) => d.direction === 'lend');
+  const borrow = debts.filter((d) => d.direction === 'borrow');
+  return send(
+    env,
+    chatId,
+    [
+      '📒 <b>Sổ nợ</b>',
+      ...(lend.length ? ['', `<b>Người khác nợ bạn: ${formatVndFull(t.owedToMe)}</b>`, ...lend.map((d) => owesLine(d, today))] : []),
+      ...(borrow.length ? ['', `<b>Bạn đang nợ: ${formatVndFull(t.iOwe)}</b>`, ...borrow.map((d) => owesLine(d, today))] : []),
+      '',
+      'Ghi trả: <code>Nam trả 200k</code> · <code>trả Hùng 1tr</code> · <code>Nam trả hết</code>',
+    ].join('\n'),
+  );
+}
+
+/** Nút "đã trả đủ" trong tin nhắc hạn nợ. */
+async function debtButton(env: Env, chatId: number, q: TgCallback, id: number, today: string) {
+  if (!Number.isInteger(id) || id <= 0) return answerCallback(env, q.id);
+  const debt = await getDebt(env, chatId, id);
+  const paid = debt ? await payDebt(env, chatId, id, null, today) : 0;
+  await removeButtons(env, chatId, q.message!.message_id);
+  if (!debt || !paid) return answerCallback(env, q.id, 'Khoản này đã xong rồi');
+  await answerCallback(env, q.id, 'Đã ghi trả đủ');
+  await send(
+    env,
+    chatId,
+    debt.direction === 'lend'
+      ? `✅ <b>${esc(debt.person)}</b> đã trả bạn ${formatVnd(paid)}. Đã cộng vào số dư.`
+      : `✅ Đã ghi bạn trả <b>${esc(debt.person)}</b> ${formatVnd(paid)}. Đã trừ khỏi số dư.`,
+  );
 }
 
 // ---------- Dư nợ trả sau (thẻ tín dụng, MoMo / ZaloPay / SPayLater trả sau) ----------

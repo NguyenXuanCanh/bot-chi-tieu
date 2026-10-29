@@ -161,3 +161,31 @@ CREATE TABLE IF NOT EXISTS cycles (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (chat_id, start_on)
 );
+
+-- Sổ nợ. direction: lend = mình cho mượn (người khác nợ mình), borrow = mình đi vay.
+-- Tiền cho mượn / trả nợ đi ra, vay / được trả đi vào số dư; không tính là chi tiêu hay thu nhập (không vào hũ).
+CREATE TABLE IF NOT EXISTS debts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL,
+  direction TEXT NOT NULL,
+  person TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  note TEXT,
+  start_on TEXT NOT NULL,
+  due_on TEXT,                          -- hẹn trả (NULL = không hẹn)
+  counts_balance INTEGER NOT NULL DEFAULT 1, -- 0 = nợ cũ: tiền đã đi/về trước khi nhập số dư
+  settled_at INTEGER,                   -- trả đủ lúc nào (NULL = còn nợ)
+  message_id INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_debts_chat ON debts (chat_id, settled_at);
+
+CREATE TABLE IF NOT EXISTS debt_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  debt_id INTEGER NOT NULL,
+  chat_id INTEGER NOT NULL,
+  amount INTEGER NOT NULL,
+  paid_on TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_debt_payments_debt ON debt_payments (debt_id);

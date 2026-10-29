@@ -2,6 +2,7 @@ import type { Env } from './ai';
 import { jarBudgets, periodStatus } from './budget';
 import { billedMonth, pendingCharges } from './credit';
 import { addDays, addMonths, daysBetween, formatDay, formatMonth, monthOf, monthPeriod, sameDayNextMonth, SPEND_JARS, type Period } from './core';
+import { debtFlowSince, listDebts } from './debts';
 import { salaryState, type PendingIncome } from './period';
 import { dueDay, listRecurring } from './recurring';
 
@@ -33,7 +34,9 @@ export async function currentBalance(env: Env, chat: number) {
   ]);
   const incomeSince = (inc.results[0] as { s: number }).s;
   const spentSince = (exp.results[0] as { s: number }).s;
-  return { snapshot: snap, incomeSince, spentSince, now: snap.amount + incomeSince - spentSince };
+  // Sổ nợ: cho mượn / mình trả nợ (−), vay / được trả (+).
+  const debtSince = await debtFlowSince(env, chat, snap.created_at);
+  return { snapshot: snap, incomeSince, spentSince, debtSince, now: snap.amount + incomeSince - spentSince + debtSince };
 }
 
 /** Một dòng dự báo: + thu / − chi, có ngày (chi tiếp theo hũ thì không có ngày). */
@@ -55,11 +58,12 @@ export type Forecast = {
 export async function forecast(env: Env, chat: number, today: string): Promise<Forecast | null> {
   const balance = await currentBalance(env, chat);
   if (!balance) return null;
-  const [salary, budgets, recurring, credit] = await Promise.all([
+  const [salary, budgets, recurring, credit, debts] = await Promise.all([
     salaryState(env, chat, today),
     jarBudgets(env, chat),
     listRecurring(env, chat),
     pendingCharges(env, chat),
+    listDebts(env, chat),
   ]);
   const { period: cur, payday, average: avgIncome } = salary;
   const status = await periodStatus(env, chat, cur, today);
@@ -109,6 +113,15 @@ export async function forecast(env: Env, chat: number, today: string): Promise<F
   }
   const creditLines: ForecastLine[] = [...creditByDay].map(([day, amount]) => ({ label: 'Trả dư nợ trả sau', amount: -amount, day }));
 
+  // Sổ nợ có hẹn: mình nợ thì phải trả (quá hạn coi như trả ngay); người khác nợ đã quá hạn thì không trông vào.
+  const debtLines: ForecastLine[] = debts
+    .filter((d) => d.due_on && (d.direction === 'borrow' || d.due_on >= today))
+    .map((d) => ({
+      label: d.direction === 'lend' ? `${d.person} hẹn trả nợ` : `Trả nợ ${d.person}${d.due_on! < today ? ' (quá hạn)' : ''}`,
+      amount: d.direction === 'lend' ? d.remaining : -d.remaining,
+      day: d.due_on! < today ? today : d.due_on!,
+    }));
+
   const inRange = (l: ForecastLine, from: string, to: string) => !!l.day && l.day >= from && l.day <= to;
   const jarSpend = SPEND_JARS.reduce((s, k) => s + budgets[k], 0);
   const daysLeft = Math.max(0, daysBetween(today, cur.to));
@@ -122,6 +135,7 @@ export async function forecast(env: Env, chat: number, today: string): Promise<F
     ...incomeLines.filter((l) => inRange(l, today, cur.to)),
     ...fixedA,
     ...creditLines.filter((l) => inRange(l, addDays(today, 1), cur.to)),
+    ...debtLines.filter((l) => inRange(l, today, cur.to)),
     { label: jarSpend > 0 ? 'Chi tiếp (phần còn lại của các hũ)' : 'Chi tiếp (theo mức chi mỗi ngày)', amount: -spendA },
   ].sort((a, b) => (a.day ?? '9').localeCompare(b.day ?? '9'));
   const endA = balance.now + linesA.reduce((s, l) => s + l.amount, 0);
@@ -131,6 +145,7 @@ export async function forecast(env: Env, chat: number, today: string): Promise<F
   const linesB: ForecastLine[] = [
     ...incomeLines.filter((l) => inRange(l, next.from, next.to)),
     ...creditLines.filter((l) => inRange(l, next.from, next.to)),
+    ...debtLines.filter((l) => inRange(l, next.from, next.to)),
     { label: jarSpend > 0 ? 'Chi theo hũ' : 'Chi như kỳ này', amount: -spendB },
   ].sort((a, b) => (a.day ?? '9').localeCompare(b.day ?? '9'));
   const endB = endA + linesB.reduce((s, l) => s + l.amount, 0);

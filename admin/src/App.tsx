@@ -1,6 +1,6 @@
-import { Coins, LayoutDashboard, LogOut, Plane, ReceiptText, Settings as SettingsIcon, Target, Wallet } from 'lucide-react';
+import { BookUser, Coins, Ellipsis, LayoutDashboard, LogOut, Plane, ReceiptText, Settings as SettingsIcon, Target, Wallet } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
-import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
 import { Button, Card, cx, ErrorBox, Field, Input, Spinner, ToastProvider } from './components/ui';
 import { api, getToken, setToken } from './lib/api';
@@ -12,12 +12,14 @@ const TripsPage = lazy(() => import('./pages/Trips'));
 const TripDetailPage = lazy(() => import('./pages/TripDetail'));
 const BudgetPage = lazy(() => import('./pages/Budget'));
 const GoalPage = lazy(() => import('./pages/Goal'));
+const DebtsPage = lazy(() => import('./pages/Debts'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 
 const NAV = [
   { to: '/', label: 'Tổng quan', icon: LayoutDashboard, end: true },
   { to: '/expenses', label: 'Chi tiêu', icon: ReceiptText },
   { to: '/budget', label: 'Ngân sách', icon: Coins },
+  { to: '/debts', label: 'Sổ nợ', icon: BookUser },
   { to: '/goal', label: 'Mục tiêu', icon: Target },
   { to: '/trips', label: 'Chuyến đi', icon: Plane },
   { to: '/settings', label: 'Cài đặt', icon: SettingsIcon },
@@ -89,6 +91,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
             <Route path="/expenses" element={<ExpensesPage />} />
             <Route path="/budget" element={<BudgetPage />} />
             <Route path="/goal" element={<GoalPage />} />
+            <Route path="/debts" element={<DebtsPage />} />
             <Route path="/trips" element={<TripsPage />} />
             <Route path="/trips/:id" element={<TripDetailPage />} />
             <Route path="/settings" element={<SettingsPage onLogout={onLogout} />} />
@@ -98,24 +101,54 @@ function Shell({ onLogout }: { onLogout: () => void }) {
         </div>
       </main>
 
-      {/* Thanh dưới (điện thoại) */}
+      {/* Thanh dưới (điện thoại): 4 trang chính + "Thêm" cho các trang còn lại. */}
+      <MobileNav />
+    </div>
+  );
+}
+
+const MOBILE_MAIN = ['/', '/expenses', '/budget', '/debts'];
+
+function MobileNav() {
+  const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
+  useEffect(() => setOpen(false), [pathname]);
+  const more = NAV.filter((n) => !MOBILE_MAIN.includes(n.to));
+  const moreActive = more.some((n) => pathname.startsWith(n.to));
+  const item = (active: boolean) =>
+    cx('flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-medium leading-tight', active ? 'text-primary' : 'text-muted-foreground');
+  return (
+    <>
+      {open ? <button className="fixed inset-0 z-30 bg-slate-900/20 md:hidden" aria-label="Đóng menu" onClick={() => setOpen(false)} /> : null}
+      {open ? (
+        <div className="fixed inset-x-3 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-40 rounded-xl border border-border bg-card p-2 shadow-xl md:hidden" role="menu">
+          {more.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              role="menuitem"
+              className={({ isActive }) => cx('flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium', isActive ? 'bg-primary text-white' : 'hover:bg-muted')}>
+              <n.icon className="size-4" aria-hidden />
+              {n.label}
+            </NavLink>
+          ))}
+        </div>
+      ) : null}
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-border bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-border bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
         aria-label="Điều hướng">
-        {NAV.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) =>
-              cx('flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-medium leading-tight', isActive ? 'text-primary' : 'text-muted-foreground')
-            }>
-            <item.icon className="size-5" aria-hidden />
-            {item.label}
+        {NAV.filter((n) => MOBILE_MAIN.includes(n.to)).map((n) => (
+          <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => item(isActive)}>
+            <n.icon className="size-5" aria-hidden />
+            {n.label}
           </NavLink>
         ))}
+        <button onClick={() => setOpen((v) => !v)} className={item(open || moreActive)} aria-expanded={open} aria-haspopup="menu">
+          <Ellipsis className="size-5" aria-hidden />
+          Thêm
+        </button>
       </nav>
-    </div>
+    </>
   );
 }
 

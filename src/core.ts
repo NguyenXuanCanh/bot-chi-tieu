@@ -388,3 +388,79 @@ export function periodOf(starts: string[], day: string, today: string): Period {
   const cycles = cyclePeriods(starts, today);
   return cycles.find((p) => p.from <= day && day <= p.to) ?? monthPeriod(monthOf(day));
 }
+
+// ---------- Sổ nợ ----------
+
+/** lend = mình cho mượn (người khác nợ mình), borrow = mình đi vay (mình nợ người khác). */
+export type DebtDirection = 'lend' | 'borrow';
+export type DebtIntent = {
+  /** lend / borrow = ghi khoản nợ mới; repaid = người ta trả mình; repay = mình trả người ta. */
+  kind: 'lend' | 'borrow' | 'repaid' | 'repay';
+  person: string;
+  /** null = trả hết ("Nam trả hết"). */
+  amount: number | null;
+  due: string | null;
+  note: string;
+};
+
+/** "hạn 15/11", "hẹn 15/11/2027", "đến 15/11", "cuối tháng" -> ngày hẹn trả (luôn từ hôm nay trở đi). */
+function takeDue(text: string, today: string): { due: string | null; rest: string } {
+  const m = text.match(/(?:hạn|hẹn|đến|tới|trước)\s+(?:ngày\s+)?(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/i);
+  if (m) {
+    const [d, mo] = [Number(m[1]), Number(m[2])];
+    if (d >= 1 && d <= 31 && mo >= 1 && mo <= 12) {
+      let year = Number(m[3] ?? today.slice(0, 4));
+      let due = `${year}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      if (!m[3] && due < today) due = `${++year}-${due.slice(5)}`;
+      return { due, rest: text.replace(m[0], ' ') };
+    }
+  }
+  const end = text.match(/(?:hạn|hẹn|đến|tới)?\s*cuối\s+tháng(?:\s+này)?/i);
+  if (end) return { due: `${monthOf(today)}-${String(daysInMonth(monthOf(today))).padStart(2, '0')}`, rest: text.replace(end[0], ' ') };
+  return { due: null, rest: text };
+}
+
+/** "Nam 500k tiền ăn" -> người = các chữ trước số tiền, ghi chú = phần sau. */
+function personAndAmount(text: string): { person: string; amount: number | null; note: string } | null {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    const two = i + 1 < words.length ? parseAmount(words[i] + words[i + 1]) : null;
+    const amount = two ?? parseAmount(words[i]);
+    if (amount && amount >= 1000) {
+      const person = words.slice(0, i).join(' ');
+      return person ? { person, amount, note: words.slice(i + (two ? 2 : 1)).join(' ') } : null;
+    }
+    if (/^(hết|het|đủ|du)$/i.test(words[i]) && i > 0) return { person: words.slice(0, i).join(' '), amount: null, note: '' };
+  }
+  return null;
+}
+
+const clean = (s: string) => s.replace(/[\s,.;:!-]+$/g, '').replace(/^[\s,.;:-]+/, '').trim().slice(0, 40);
+
+/**
+ * Đọc câu sổ nợ. Trả về null nếu không phải. repaid / repay chỉ là "có thể": nơi gọi phải kiểm tra
+ * có khoản nợ đang mở với người đó (tránh "trả tiền nhà 5tr" bị hiểu là trả nợ).
+ */
+export function parseDebt(text: string, today: string): DebtIntent | null {
+  const { due, rest } = takeDue(text.trim(), today);
+  const t = rest.replace(/\s+/g, ' ').trim();
+  const make = (kind: DebtIntent['kind'], body: string, prefix = '') => {
+    const p = personAndAmount(`${prefix} ${body}`.trim());
+    if (!p || (p.amount === null && (kind === 'lend' || kind === 'borrow'))) return null;
+    const person = clean(p.person);
+    return person ? { kind, person, amount: p.amount, due, note: clean(p.note) } : null;
+  };
+  let m: RegExpMatchArray | null;
+  // "cho Nam mượn 500k" / "cho mượn Nam 500k"
+  if ((m = t.match(/^cho\s+(mượn|vay)\s+(.+)$/i))) return make('lend', m[2]);
+  if ((m = t.match(/^cho\s+(.+?)\s+(?:mượn|vay)\s+(.+)$/i))) return make('lend', m[2], m[1]);
+  // "Hùng cho mượn 2tr" / "Hùng cho mình vay 2tr"
+  if ((m = t.match(/^(.+?)\s+cho\s+(?:mình\s+|tôi\s+|tao\s+|em\s+|anh\s+)?(?:mượn|vay)\s+(.+)$/i))) return make('borrow', m[2], m[1]);
+  // "vay Hùng 2tr" / "mượn của Hùng 2tr"
+  if ((m = t.match(/^(?:mượn|vay)\s+(?:của\s+|tiền\s+)?(.+)$/i))) return make('borrow', m[1]);
+  // "trả Hùng 1tr" / "trả nợ Hùng hết"
+  if ((m = t.match(/^trả\s+(?:lại\s+)?(?:nợ\s+)?(?:cho\s+)?(.+)$/i))) return make('repay', m[1]);
+  // "Nam trả 200k" / "Nam trả hết"
+  if ((m = t.match(/^(.+?)\s+trả\s+(?:lại\s+)?(?:nợ\s+)?(?:mình\s+|tôi\s+|tao\s+)?(.+)$/i))) return make('repaid', m[2], m[1]);
+  return null;
+}

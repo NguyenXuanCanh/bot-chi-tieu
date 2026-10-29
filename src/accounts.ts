@@ -135,6 +135,8 @@ const DATA_TABLES = [
   'credit_charges',
   'balances',
   'bot_messages',
+  'debts',
+  'debt_payments',
 ];
 /** Bảng có khóa chính gồm chat_id: chỉ chuyển khi đích chưa có dòng trùng. */
 const KEYED_TABLES: [string, string][] = [
@@ -142,6 +144,7 @@ const KEYED_TABLES: [string, string][] = [
   ['jars', 'jar'],
   ['category_jars', 'category'],
   ['prefs', 'key'],
+  ['cycles', 'start_on'],
 ];
 
 /** Chuyển dữ liệu từ khóa này sang khóa khác (VD từ -id sang chat Telegram khi liên kết). */

@@ -112,3 +112,21 @@ test('cycle periods', async () => {
   assert.equal(periodOf(['2026-10-28'], '2026-10-10', '2026-11-05').key, '2026-10'); // trước kỳ đầu: tháng lịch
   assert.equal(periodOf([], '2026-10-10', '2026-11-05').label, 'Tháng 10/2026');
 });
+
+test('parseDebt', async () => {
+  const { parseDebt } = await import('../src/core.ts');
+  const today = '2026-10-29';
+  assert.deepEqual(parseDebt('cho Nam mượn 500k hẹn 15/11', today), { kind: 'lend', person: 'Nam', amount: 500_000, due: '2026-11-15', note: '' });
+  assert.deepEqual(parseDebt('cho mượn Lan 1tr2 tiền nhà', today), { kind: 'lend', person: 'Lan', amount: 1_200_000, due: null, note: 'tiền nhà' });
+  assert.equal(parseDebt('vay Hùng 2tr', today)?.kind, 'borrow');
+  assert.equal(parseDebt('mượn của anh Tuấn 300k', today)?.person, 'anh Tuấn');
+  assert.deepEqual(parseDebt('Hùng cho mình vay 2tr đến cuối tháng', today), { kind: 'borrow', person: 'Hùng', amount: 2_000_000, due: '2026-10-31', note: '' });
+  assert.deepEqual(parseDebt('Nam trả 200k', today), { kind: 'repaid', person: 'Nam', amount: 200_000, due: null, note: '' });
+  assert.equal(parseDebt('Nam trả hết', today)?.amount, null);
+  assert.deepEqual(parseDebt('trả Hùng 1tr', today), { kind: 'repay', person: 'Hùng', amount: 1_000_000, due: null, note: '' });
+  assert.equal(parseDebt('trả nợ momo 500k', today)?.person, 'momo'); // nơi gọi sẽ bỏ qua nếu không có nợ với "momo"
+  assert.equal(parseDebt('cho Nam mượn', today), null);
+  assert.equal(parseDebt('phở 45k', today), null);
+  assert.equal(parseDebt('cho mèo ăn 50k', today), null);
+  assert.equal(parseDebt('hẹn 15/8 cho Nam mượn 100k', today)?.due, '2027-08-15');
+});

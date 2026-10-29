@@ -30,6 +30,7 @@ import {
   type User,
 } from './accounts';
 import { askSpending } from './ask';
+import { addDebt, debtTotals, deleteDebt, listDebts, payDebt } from './debts';
 import { isSalary, listPeriods, periodByKey, periodFor, receiveIncome, salaryState } from './period';
 import { botUsername, esc, send } from './telegram';
 import { forecast, setBalance } from './balance';
@@ -250,6 +251,46 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
     await addIncome(env, chat, monthOf(today), amount, note, true);
     return json({ ok: true });
   }
+  // ---------- Sổ nợ ----------
+  if (path === '/debts' && method === 'GET') {
+    const [open, settled] = await Promise.all([listDebts(env, chat), listDebts(env, chat, true)]);
+    const payments = await env.DB.prepare(
+      'SELECT id, debt_id, amount, paid_on FROM debt_payments WHERE chat_id = ? ORDER BY paid_on DESC, id DESC LIMIT 200',
+    )
+      .bind(chat)
+      .all();
+    return json({ open, settled, payments: payments.results, totals: debtTotals(open), today });
+  }
+  if (path === '/debts' && method === 'POST') {
+    const value = readDebt(body);
+    if ('error' in value) return bad(value.error);
+    const row = await addDebt(env, chat, { ...value, start_on: isDay(body.start_on) ? body.start_on : today });
+    return json({ id: row?.id });
+  }
+  if ((m = path.match(/^\/debts\/(\d+)$/))) {
+    const id = Number(m[1]);
+    if (method === 'PATCH') {
+      const value = readDebt(body);
+      if ('error' in value) return bad(value.error);
+      await env.DB.prepare('UPDATE debts SET person = ?, amount = ?, note = ?, due_on = ?, counts_balance = ? WHERE id = ? AND chat_id = ?')
+        .bind(value.person, value.amount, value.note, value.due_on, value.counts_balance ? 1 : 0, id, chat)
+        .run();
+      return json({ ok: true });
+    }
+    if (method === 'DELETE') {
+      await deleteDebt(env, chat, id);
+      return json({ ok: true });
+    }
+  }
+  if ((m = path.match(/^\/debts\/(\d+)\/pay$/)) && method === 'POST') {
+    // amount bỏ trống = trả hết phần còn lại.
+    const amount = body.amount === undefined || body.amount === null || body.amount === '' ? null : Math.round(Number(body.amount));
+    if (amount !== null && !(amount > 0)) return bad('Số tiền không hợp lệ');
+    const paid = await payDebt(env, chat, Number(m[1]), amount, isDay(body.paid_on) ? body.paid_on : today);
+    if (!paid) return bad('Khoản nợ này đã xong hoặc không tồn tại');
+    return json({ paid });
+  }
+
   if (path === '/salary' && method === 'GET') {
     const state = await salaryState(env, chat, today);
     return json({ pending: state.pending, due: state.due, period: state.period, average: state.average });
@@ -440,6 +481,19 @@ async function dashboard(env: Env, chat: number, today: string) {
   };
 }
 
+function readDebt(body: Record<string, unknown>):
+  | { error: string }
+  | { direction: 'lend' | 'borrow'; person: string; amount: number; note: string | null; due_on: string | null; counts_balance: boolean } {
+  const person = typeof body.person === 'string' ? body.person.trim().slice(0, 40) : '';
+  const amount = Math.round(Number(body.amount));
+  if (body.direction !== 'lend' && body.direction !== 'borrow') return { error: 'Chọn cho mượn hay đi vay' };
+  if (!person) return { error: 'Nhập tên người' };
+  if (!(amount > 0) || amount > 10_000_000_000) return { error: 'Số tiền không hợp lệ' };
+  if (body.due_on && !isDay(body.due_on)) return { error: 'Ngày hẹn không hợp lệ' };
+  const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 80) : null;
+  return { direction: body.direction, person, amount, note, due_on: (body.due_on as string) || null, counts_balance: body.counts_balance !== false };
+}
+
 function readRecurring(body: Record<string, unknown>): { error: string } | { item: string; amount: number; day: number; category: string } {
   const item = typeof body.item === 'string' ? body.item.trim().slice(0, 80) : '';
   const amount = Math.round(Number(body.amount));
@@ -487,7 +541,7 @@ async function summary(env: Env, chat: number, q: URLSearchParams) {
       `SELECT category, SUM(amount) AS total, COUNT(*) AS count FROM expenses WHERE ${range} GROUP BY category ORDER BY total DESC`,
     ).bind(chat, from, to),
     env.DB.prepare(
-      `SELECT spent_on AS day, SUM(amount) AS total,
+      `SELECT spent_on AS day, SUM(amount) AS total, COUNT(*) AS count,
               COALESCE(SUM(CASE WHEN trip_id IS NOT NULL THEN amount END),0) AS travel
          FROM expenses WHERE ${range} GROUP BY spent_on ORDER BY spent_on`,
     ).bind(chat, from, to),
@@ -513,18 +567,19 @@ async function summary(env: Env, chat: number, q: URLSearchParams) {
     perDay: Math.round(t.total / days),
     previous: { from: prevFrom, to: prevTo, total: (prev.results[0] as { total: number }).total },
     byCategory: byCategory.results,
-    byDay: fillDays(from, to, byDay.results as { day: string; total: number; travel: number }[]),
+    byDay: fillDays(from, to, byDay.results as DayRow[]),
     topItems: topItems.results,
     trips: trips.results,
   };
 }
 
 /** Thêm các ngày không chi tiêu (0) để biểu đồ không bị nhảy cóc. */
-function fillDays(from: string, to: string, rows: { day: string; total: number; travel: number }[]) {
+type DayRow = { day: string; total: number; travel: number; count: number };
+function fillDays(from: string, to: string, rows: DayRow[]) {
   const map = new Map(rows.map((r) => [r.day, r]));
   const out = [];
   for (let d = from; d <= to; d = addDays(d, 1)) {
-    out.push(map.get(d) ?? { day: d, total: 0, travel: 0 });
+    out.push(map.get(d) ?? { day: d, total: 0, travel: 0, count: 0 });
     if (out.length > 400) break;
   }
   return out;

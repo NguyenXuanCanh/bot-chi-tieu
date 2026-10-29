@@ -29,6 +29,9 @@ Tính năng chính:
 - **Mục tiêu tiết kiệm**: AI lập kế hoạch giữ/giảm/cắt theo danh mục.
 - **Báo cáo**: tổng kết tháng (ngày 1), nhắc 21h nếu chưa ghi gì, `/hoi` và ô hỏi đáp trên web.
 - **Tài khoản**: nhiều người dùng, dữ liệu tách theo tài khoản, liên kết Telegram bằng mã xác minh.
+- **Kỳ lương**: bấm "+lương" = cộng lương vào số dư và bắt đầu tháng mới; hũ, báo cáo, dự báo tính theo kỳ.
+- **Sổ nợ**: cho mượn / đi vay, trả dần, hẹn trả có nhắc; cộng/trừ số dư nhưng không phải chi tiêu.
+- **Lịch chi tiêu** (trang Chi tiêu → Lịch) và **cài web thành app** (PWA: manifest + service worker, không lưu dữ liệu API).
 
 ## 2. Kiến trúc
 
@@ -61,6 +64,8 @@ src/                 Backend (Worker, TypeScript)
   reports.ts         Tổng kết tháng, nhắc 21h, nhắc ngày lương
   ask.ts             Hỏi đáp chi tiêu (dùng chung cho /hoi và web)
   prefs.ts           Tùy chọn theo chat (ngày lương, tắt nhắc)
+  period.ts          Kỳ lương, trạng thái lương chờ nhận, nhận lương
+  debts.ts           Sổ nợ: ghi, trả dần, tiền nợ đi/về cho số dư
   telegram.ts        Gửi tin, tải ảnh từ Telegram
 admin/               Frontend: React 19 + Vite + Tailwind v4 + recharts (package.json riêng)
   src/pages/         Tổng quan, Chi tiêu, Ngân sách, Mục tiêu, Chuyến đi, Cài đặt
@@ -93,6 +98,8 @@ scripts/             Telegram giả + script giả lập tin nhắn để test t
 | `bot_messages` | Tin bot đã gửi ↔ khoản chi, để reply-sửa |
 | `prefs` | `payday`, `remind` theo chat |
 | `users`, `link_codes` | Tài khoản web; mã xác minh liên kết Telegram |
+| `cycles` | Ngày bắt đầu các kỳ lương (thêm khi bấm nhận lương) |
+| `debts`, `debt_payments` | Sổ nợ (`direction` lend/borrow, `counts_balance` = 0 cho nợ cũ) và các lần trả |
 
 Ngày giờ: mọi ngày lưu dạng `YYYY-MM-DD` theo **giờ Việt Nam (UTC+7)**: `vnDate()` trong `core.ts`.
 Tiền: số nguyên VND.

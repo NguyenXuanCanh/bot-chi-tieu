@@ -1,6 +1,7 @@
 import { linkedChats } from './accounts';
 import type { Env } from './ai';
 import { forecast } from './balance';
+import { listDebts } from './debts';
 import { activeGoal, goalProgress, jarLine, periodStatus, reviewMonth } from './budget';
 import { addMonths, emojiOf, formatDay, formatVnd, formatVndFull, monthOf, monthPeriod, sameDayNextMonth, type Period } from './core';
 import { cycleStarts, listPeriods, salaryState } from './period';
@@ -122,6 +123,28 @@ export async function remindPayday(env: Env, today: string) {
         `<i>Số khác thì gõ <code>/luong 25tr</code>. Chưa về thì cứ để đó, khi nào về hãy bấm.</i>`,
       ].join('\n'),
       buttons,
+    );
+  }
+}
+
+/** Ngày hẹn trả nợ (00:05): nhắc kèm nút "đã trả đủ". */
+export async function remindDebts(env: Env, today: string) {
+  for (const chat of await allowedChats(env)) {
+    const due = (await listDebts(env, chat)).filter((d) => d.due_on === today);
+    if (!due.length) continue;
+    await send(
+      env,
+      chat,
+      [
+        `📒 <b>Hôm nay (${formatDay(today)}) tới hạn trả nợ</b>`,
+        ...due.map((d) =>
+          d.direction === 'lend' ? `• <b>${esc(d.person)}</b> hẹn trả bạn ${formatVnd(d.remaining)}` : `• Bạn hẹn trả <b>${esc(d.person)}</b> ${formatVnd(d.remaining)}`,
+        ),
+        '<i>Trả một phần thì nhắn, VD <code>Nam trả 200k</code>.</i>',
+      ].join('\n'),
+      due.map((d) => [
+        { text: d.direction === 'lend' ? `✅ ${d.person} đã trả ${formatVnd(d.remaining)}` : `✅ Đã trả ${d.person} ${formatVnd(d.remaining)}`, data: `debt:${d.id}` },
+      ]),
     );
   }
 }

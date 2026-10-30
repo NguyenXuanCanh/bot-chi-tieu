@@ -1,10 +1,10 @@
-import { CalendarDays, ChevronLeft, ChevronRight, List, Pencil, Plane, Plus, Search, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { CalendarDays, ChevronLeft, ChevronRight, CreditCard, List, Pencil, Plane, Plus, Search, Trash2 } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { Button, Card, CategoryBadge, cx, EmptyState, ErrorBox, Field, Input, Modal, Select, Spinner, useToast } from '../components/ui';
 import { api, type Expense, type Meta, type TripRow } from '../lib/api';
-import { dayLabel, vnd } from '../lib/format';
+import { addMonths, dayLabel, monthLabel, PAYLATER, vnd } from '../lib/format';
 import { useApi } from '../lib/use-api';
 import { ExpenseCalendar } from './ExpenseCalendar';
 import { ExpenseForm } from './ExpenseForm';
@@ -18,6 +18,7 @@ export default function ExpensesPage() {
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<Expense | 'new' | null>(null);
   const [deleting, setDeleting] = useState<Expense | null>(null);
+  const [crediting, setCrediting] = useState<Expense | null>(null);
   const [busy, setBusy] = useState(false);
   // ?view=calendar = xem dạng lịch; ?new=1 = mở luôn form thêm (lối tắt khi nhấn giữ icon app).
   const [params, setParams] = useSearchParams();
@@ -176,7 +177,7 @@ export default function ExpensesPage() {
                         <th className="px-4 py-3 font-medium">Danh mục</th>
                         <th className="px-4 py-3 font-medium">Nơi / chuyến</th>
                         <th className="px-4 py-3 text-right font-medium">Số tiền</th>
-                        <th className="w-24 px-4 py-3" aria-label="Thao tác" />
+                        <th className="w-32 px-4 py-3" aria-label="Thao tác" />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
@@ -192,7 +193,7 @@ export default function ExpensesPage() {
                           </td>
                           <td className="num px-4 py-2.5 text-right font-semibold">{vnd(e.amount)}</td>
                           <td className="px-4 py-2.5">
-                            <RowActions onEdit={() => setEditing(e)} onDelete={() => setDeleting(e)} />
+                            <RowActions onEdit={() => setEditing(e)} onDelete={() => setDeleting(e)} onCredit={() => setCrediting(e)} />
                           </td>
                         </tr>
                       ))}
@@ -212,7 +213,7 @@ export default function ExpensesPage() {
                         </div>
                         <div className="flex flex-col items-end gap-1">
                           <p className="num font-semibold">{vnd(e.amount)}</p>
-                          <RowActions onEdit={() => setEditing(e)} onDelete={() => setDeleting(e)} />
+                          <RowActions onEdit={() => setEditing(e)} onDelete={() => setDeleting(e)} onCredit={() => setCrediting(e)} />
                         </div>
                       </li>
                     ))}
@@ -257,6 +258,21 @@ export default function ExpensesPage() {
         ) : null}
       </Modal>
 
+      <Modal open={crediting !== null} title="Chuyển sang trả sau" onClose={() => setCrediting(null)}>
+        {crediting ? (
+          <ToCreditForm
+            expense={crediting}
+            onCancel={() => setCrediting(null)}
+            onDone={() => {
+              toast(`Đã chuyển “${crediting.item}” sang dư nợ trả sau`);
+              setCrediting(null);
+              list.reload();
+              setVersion((v) => v + 1);
+            }}
+          />
+        ) : null}
+      </Modal>
+
       <Modal open={deleting !== null} title="Xóa khoản chi?" onClose={() => setDeleting(null)}>
         <p>
           Xóa <b>{deleting?.item}</b> ({deleting ? vnd(deleting.amount) : ''}, ngày {deleting ? dayLabel(deleting.spent_on) : ''})? Không hoàn tác được.
@@ -286,9 +302,12 @@ function Where({ e }: { e: Expense }) {
   return <span className="text-muted-foreground">{e.city ?? '—'}</span>;
 }
 
-function RowActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+function RowActions({ onEdit, onDelete, onCredit }: { onEdit: () => void; onDelete: () => void; onCredit: () => void }) {
   return (
     <div className="flex justify-end gap-1">
+      <button onClick={onCredit} className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Chuyển sang trả sau" title="Thực ra trả bằng thẻ / ví trả sau">
+        <CreditCard className="size-4" />
+      </button>
       <button onClick={onEdit} className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Sửa">
         <Pencil className="size-4" />
       </button>
@@ -296,5 +315,57 @@ function RowActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => 
         <Trash2 className="size-4" />
       </button>
     </div>
+  );
+}
+
+/** Khoản chi thực ra trả bằng thẻ / ví trả sau: rút khỏi chi tiêu kỳ này, trừ vào ngày 1 tháng sau tháng mua. */
+function ToCreditForm({ expense, onCancel, onDone }: { expense: Expense; onCancel: () => void; onDone: () => void }) {
+  const [provider, setProvider] = useState('card');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const next = addMonths(expense.spent_on.slice(0, 7), 1);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/expenses/${expense.id}/to-credit`, { method: 'POST', body: { provider } });
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-4">
+      <p className="text-sm">
+        <b>{expense.item}</b> · {vnd(expense.amount)} · ngày {dayLabel(expense.spent_on)}
+      </p>
+      <Field label="Thực ra đã trả qua">
+        {(id) => (
+          <Select id={id} value={provider} onChange={(e) => setProvider(e.target.value)}>
+            {PAYLATER.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Field>
+      <p className="rounded-lg bg-muted px-3 py-2 text-sm">
+        Khoản này sẽ không tính vào chi tiêu kỳ hiện tại nữa, mà vào dư nợ trả sau và thành chi tiêu ngày <b>1/{monthLabel(next)}</b>.
+        Giữ nguyên danh mục và chuyến đi.
+      </p>
+      {error ? <ErrorBox message={error} /> : null}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Hủy
+        </Button>
+        <Button type="submit" loading={busy}>
+          Chuyển
+        </Button>
+      </div>
+    </form>
   );
 }

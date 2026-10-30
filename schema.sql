@@ -100,6 +100,9 @@ CREATE TABLE IF NOT EXISTS credit_charges (
   spent_on TEXT NOT NULL,            -- ngày quẹt thẻ / mua trả sau
   settled INTEGER NOT NULL DEFAULT 0, -- 1 = đã chuyển thành chi tiêu
   provider TEXT NOT NULL DEFAULT 'card', -- card | momo | zalopay | spaylater | other (src/core.ts PAYLATER)
+  trip_id INTEGER,                   -- giữ chuyến đi / nơi chốn khi chuyển từ chi tiêu sang trả sau
+  city TEXT,
+  place TEXT,
   message_id INTEGER,
   created_at INTEGER NOT NULL
 );

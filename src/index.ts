@@ -59,7 +59,7 @@ import {
 } from './core';
 import { forecast, setBalance, type Forecast, type ForecastLine } from './balance';
 import { addDebt, debtTotals, deleteDebt, getDebt, listDebts, openDebtsWith, payDebt, payPerson, type Debt } from './debts';
-import { addCharges, billedMonth, payEarly, pendingCharges, settleCredit, type CreditCharge } from './credit';
+import { addCharges, billedMonth, moveExpensesToCredit, payEarly, pendingCharges, settleCredit, type CreditCharge } from './credit';
 import { addRecurring, chargeOne, dueDay, listRecurring, recurringTotal, runRecurring, type Recurring } from './recurring';
 
 /**
@@ -119,6 +119,7 @@ const HELP = `👋 Ghi chi tiêu bằng cách nhắn như bình thường:
 • <code>td phở 45k</code> (thẻ tín dụng) · <code>ts momo grab 60k</code> · <code>ts zalopay …</code> · <code>ts spay …</code>
 • <code>/the</code> xem dư nợ theo từng nguồn · <code>/the xoa</code> xóa lần ghi vừa rồi
 • Trả sớm: <code>/the tra</code> (hết) · <code>/the tra momo</code> (chỉ MoMo) · <code>/the tra 2tr</code> (một phần, khoản cũ nhất trước)
+• Lỡ ghi là chi tiêu thường mà thực ra quẹt thẻ: reply tin bot bằng <code>td</code> (hoặc <code>momo</code>…), hay gõ <code>/the doi</code> cho khoản vừa ghi
 
 🔁 <b>Chi cố định hàng tháng</b> (tự trừ vào ngày đã hẹn)
 • <code>/codinh tiền nhà 5tr ngày 5</code> · <code>/codinh</code> xem danh sách
@@ -434,6 +435,37 @@ type EditRow = { id: number; item: string; amount: number; category: string; spe
  * Reply vào tin bot báo đã ghi: "60k" sửa số tiền, "ăn uống" đổi danh mục, "hôm qua" / "20/10" đổi ngày, "xóa" xóa.
  * Tin có nhiều khoản thì ghi kèm tên: "grab 60k". Trả về false nếu tin được reply không gắn với khoản nào (xử lý như tin thường).
  */
+/** Câu reply nghĩa là "khoản này trả bằng thẻ / ví trả sau": td, thẻ, tín dụng, trả sau, ts momo, momo, zalopay, spay… */
+function paylaterReply(text: string): PaylaterKey | null {
+  const t = text.trim().replace(/^(chuyển\s+(sang|qua)\s+)/i, '');
+  const m = t.match(/^(td|thẻ(?:\s+tín\s+dụng)?|tín\s+dụng|trả\s+sau|ts)(?:\s+(\S+))?$/i);
+  if (m) return (m[2] && matchPaylater(m[2])) || (/^(ts|trả\s+sau)$/i.test(m[1]) ? 'other' : 'card');
+  return /^\S+$/.test(t) ? matchPaylater(t) : null;
+}
+
+/** Chuyển các khoản chi sang dư nợ trả sau và báo lại. */
+async function convertToCredit(env: Env, chatId: number, ids: number[], provider: PaylaterKey) {
+  const moved = await moveExpensesToCredit(env, chatId, ids, provider);
+  if (!moved.length) return send(env, chatId, 'Không tìm thấy khoản chi để chuyển (có thể đã bị xóa).');
+  const pending = await pendingCharges(env, chatId);
+  const first = moved.reduce((min, m) => (m.spent_on < min ? m.spent_on : min), moved[0].spent_on);
+  const today = vnDate(Date.now());
+  return send(
+    env,
+    chatId,
+    [
+      `💳 Đã chuyển sang trả sau qua <b>${paylaterInfo(provider).name}</b>:`,
+      ...moved.map((m) => `${emojiOf(m.category)} ${esc(m.item)} (${formatDay(m.spent_on)}): ${formatVnd(m.amount)}`),
+      '',
+      `Không tính vào chi tiêu kỳ này nữa; trừ vào ngày 1/${formatMonth(billedMonth(first))}.`,
+      first < `${monthOf(today)}-01` ? '<i>Khoản của tháng trước nên sẽ thành chi tiêu ngày 1 tháng này ngay đêm nay.</i>' : '',
+      `Dư nợ trả sau: <b>${formatVndFull(pending.reduce((s, c) => s + c.amount, 0))}</b> (${byProvider(pending)})`,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+}
+
 async function editByReply(env: Env, chatId: number, replyTo: number, text: string): Promise<boolean> {
   const map = await env.DB.prepare('SELECT kind, ref FROM bot_messages WHERE chat_id = ? AND bot_message_id = ?')
     .bind(chatId, replyTo)
@@ -460,6 +492,13 @@ async function editByReply(env: Env, chatId: number, replyTo: number, text: stri
     return true;
   }
   const table = kind === 'credit' ? 'credit_charges' : 'expenses';
+
+  // Thực ra quẹt thẻ / ví trả sau: "td", "thẻ", "momo", "ts zalopay"… -> chuyển sang dư nợ trả sau.
+  const later = kind === 'expense' ? paylaterReply(text) : null;
+  if (later) {
+    await convertToCredit(env, chatId, rows.map((r) => r.id), later);
+    return true;
+  }
 
   if (/^(xóa|xoá|xoa|hủy|huỷ|huy|delete)$/i.test(text.trim())) {
     await env.DB.batch(rows.map((r) => env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(r.id)));
@@ -514,7 +553,7 @@ async function editByReply(env: Env, chatId: number, replyTo: number, text: stri
 /** Chuyến tự động không còn khoản nào thì xóa. */
 async function dropEmptyAutoTrips(env: Env, chatId: number) {
   await env.DB.prepare(
-    'DELETE FROM trips WHERE chat_id = ? AND manual = 0 AND id NOT IN (SELECT DISTINCT trip_id FROM expenses WHERE trip_id IS NOT NULL)',
+    'DELETE FROM trips WHERE chat_id = ? AND manual = 0 AND id NOT IN (SELECT DISTINCT trip_id FROM expenses WHERE trip_id IS NOT NULL) AND id NOT IN (SELECT DISTINCT trip_id FROM credit_charges WHERE trip_id IS NOT NULL AND settled = 0)',
   )
     .bind(chatId)
     .run();
@@ -608,7 +647,7 @@ async function undoLast(env: Env, chatId: number) {
   ).all<{ item: string; amount: number }>();
   // Chuyến tự động không còn khoản nào thì xóa luôn.
   await env.DB.prepare(
-    'DELETE FROM trips WHERE chat_id = ? AND manual = 0 AND id NOT IN (SELECT DISTINCT trip_id FROM expenses WHERE trip_id IS NOT NULL)',
+    'DELETE FROM trips WHERE chat_id = ? AND manual = 0 AND id NOT IN (SELECT DISTINCT trip_id FROM expenses WHERE trip_id IS NOT NULL) AND id NOT IN (SELECT DISTINCT trip_id FROM credit_charges WHERE trip_id IS NOT NULL AND settled = 0)',
   )
     .bind(chatId)
     .run();
@@ -1053,6 +1092,19 @@ async function credit(env: Env, chatId: number, arg: string, messageId: number, 
   // "/the tra" = trả sớm hết, "/the tra momo" = chỉ trả MoMo, "/the tra 2tr" = trả một phần.
   const pay = arg.match(/^(?:tra|trả|thanh toan|thanh toán)(?:\s+(.+))?$/i);
   if (pay) return payCard(env, chatId, pay[1] ?? '');
+  // "/the doi [momo]": khoản chi vừa ghi gần nhất thực ra trả bằng thẻ / ví trả sau.
+  const change = arg.match(/^(?:doi|đổi|chuyen|chuyển)(?:\s+(\S+))?$/i);
+  if (change) {
+    const last = await env.DB.prepare('SELECT id, message_id FROM expenses WHERE chat_id = ? ORDER BY id DESC LIMIT 1')
+      .bind(chatId)
+      .first<{ id: number; message_id: number | null }>();
+    if (!last) return send(env, chatId, 'Chưa có khoản chi nào để chuyển.');
+    const ids =
+      last.message_id === null
+        ? [last.id]
+        : (await env.DB.prepare('SELECT id FROM expenses WHERE chat_id = ? AND message_id = ?').bind(chatId, last.message_id).all<{ id: number }>()).results.map((r) => r.id);
+    return convertToCredit(env, chatId, ids, (change[1] && matchPaylater(change[1])) || 'card');
+  }
   if (['xoa', 'xóa'].includes(arg.toLowerCase())) {
     const last = await env.DB.prepare('SELECT id, message_id FROM credit_charges WHERE chat_id = ? AND settled = 0 ORDER BY id DESC LIMIT 1')
       .bind(chatId)

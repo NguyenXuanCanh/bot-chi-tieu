@@ -36,7 +36,7 @@ import { botUsername, esc, send } from './telegram';
 import { forecast, setBalance } from './balance';
 import { getPayday, setPref } from './prefs';
 import { dueDay } from './recurring';
-import { payEarly, pendingCharges } from './credit';
+import { moveExpensesToCredit, payEarly, pendingCharges } from './credit';
 import { addRecurring, chargeOne, listRecurring, type Recurring } from './recurring';
 import { addDays, addMonths, CATEGORY_NAMES, isPaylater, PAYLATER, daysBetween, isJar, isMonth, JARS, monthOf, toCategory, vnDate, type JarKey } from './core';
 
@@ -176,6 +176,14 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
       await dropEmptyTrips(env, chat);
       return json({ ok: true });
     }
+  }
+
+  if ((m = path.match(/^\/expenses\/(\d+)\/to-credit$/)) && method === 'POST') {
+    // Khoản chi thực ra trả bằng thẻ / ví trả sau: rút khỏi chi tiêu, chuyển sang dư nợ trả sau.
+    const provider = isPaylater(body.provider) ? body.provider : 'card';
+    const moved = await moveExpensesToCredit(env, chat, [Number(m[1])], provider);
+    if (!moved.length) return bad('Không tìm thấy khoản chi', 404);
+    return json({ moved });
   }
 
   if (path === '/trips' && method === 'GET') return json(await listTrips(env, chat));
@@ -698,6 +706,7 @@ async function dropEmptyTrips(env: Env, chat: number) {
   await env.DB.prepare(
     `DELETE FROM trips WHERE chat_id = ? AND manual = 0
        AND id NOT IN (SELECT DISTINCT trip_id FROM expenses WHERE trip_id IS NOT NULL)
+       AND id NOT IN (SELECT DISTINCT trip_id FROM credit_charges WHERE trip_id IS NOT NULL AND settled = 0)
        AND id NOT IN (SELECT active_trip_id FROM settings WHERE active_trip_id IS NOT NULL)`,
   )
     .bind(chat)

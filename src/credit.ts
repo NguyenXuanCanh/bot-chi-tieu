@@ -15,6 +15,9 @@ export type CreditCharge = {
   spent_on: string;
   settled: number;
   provider: PaylaterKey;
+  trip_id: number | null;
+  city: string | null;
+  place: string | null;
   created_at: number;
 };
 
@@ -62,8 +65,8 @@ export async function settleCredit(env: Env, today: string, chat?: number) {
     // Đánh dấu có điều kiện trước để chạy trùng cũng không ghi 2 lần.
     const claimed = await env.DB.prepare('UPDATE credit_charges SET settled = 1 WHERE id = ? AND settled = 0 RETURNING id').bind(c.id).first();
     if (!claimed) continue;
-    await env.DB.prepare('INSERT INTO expenses (chat_id, amount, item, category, spent_on, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(c.chat_id, c.amount, settledName(c), c.category, `${billedMonth(c.spent_on)}-01`, Date.now())
+    await env.DB.prepare('INSERT INTO expenses (chat_id, amount, item, category, spent_on, created_at, trip_id, city, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(c.chat_id, c.amount, settledName(c), c.category, `${billedMonth(c.spent_on)}-01`, Date.now(), c.trip_id, c.city, c.place)
       .run();
     settled.set(c.chat_id, [...(settled.get(c.chat_id) ?? []), c]);
   }
@@ -96,12 +99,37 @@ export async function payEarly(env: Env, chat: number, amount: number | null, to
           .first()
       : await env.DB.prepare('UPDATE credit_charges SET settled = 1 WHERE id = ? AND settled = 0 RETURNING id').bind(c.id).first();
     if (!claimed) continue;
-    await env.DB.prepare('INSERT INTO expenses (chat_id, amount, item, category, spent_on, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(chat, part, settledName(c, partial ? ', trả một phần' : ''), c.category, today, Date.now())
+    await env.DB.prepare('INSERT INTO expenses (chat_id, amount, item, category, spent_on, created_at, trip_id, city, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(chat, part, settledName(c, partial ? ', trả một phần' : ''), c.category, today, Date.now(), c.trip_id, c.city, c.place)
       .run();
     items.push({ item: c.item, amount: part, spent_on: c.spent_on, partial, provider: c.provider });
     budget -= part;
   }
   const remaining = (await pendingCharges(env, chat)).filter((c) => !provider || c.provider === provider).reduce((s, c) => s + c.amount, 0);
   return { paid: items.reduce((s, i) => s + i.amount, 0), items, remaining };
+}
+
+export type MovedExpense = { item: string; amount: number; category: string; spent_on: string };
+
+/**
+ * Chuyển khoản chi đã ghi (thực ra thanh toán bằng thẻ / ví trả sau) sang dư nợ trả sau:
+ * rút khỏi chi tiêu và hũ, giữ ngày mua, danh mục, chuyến đi; ngày 1 tháng sau tháng mua mới thành chi tiêu.
+ * Khoản của tháng trước sẽ được cron chuyển lại thành chi tiêu ngày 1 tháng này ngay đêm đó.
+ */
+export async function moveExpensesToCredit(env: Env, chat: number, ids: number[], provider: PaylaterKey): Promise<MovedExpense[]> {
+  const moved: MovedExpense[] = [];
+  for (const id of ids) {
+    const e = await env.DB.prepare('DELETE FROM expenses WHERE id = ? AND chat_id = ? RETURNING *')
+      .bind(id, chat)
+      .first<{ amount: number; item: string; category: string; spent_on: string; message_id: number | null; trip_id: number | null; city: string | null; place: string | null }>();
+    if (!e) continue;
+    await env.DB.prepare(
+      `INSERT INTO credit_charges (chat_id, amount, item, category, spent_on, message_id, created_at, provider, trip_id, city, place)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(chat, e.amount, e.item, e.category, e.spent_on, e.message_id, Date.now(), provider, e.trip_id, e.city, e.place)
+      .run();
+    moved.push({ item: e.item, amount: e.amount, category: e.category, spent_on: e.spent_on });
+  }
+  return moved;
 }

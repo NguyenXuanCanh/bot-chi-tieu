@@ -10,7 +10,9 @@ const MIGRATIONS = [
   // 2026-10: lương có trạng thái chờ nhận / đã nhận. Thu nhập các tháng trước và thưởng coi như đã nhận lúc ghi;
   // lương tháng hiện tại để chờ người dùng bấm "+lương".
   'ALTER TABLE incomes ADD COLUMN received_at INTEGER',
-  "UPDATE incomes SET received_at = created_at WHERE received_at IS NULL AND (month < strftime('%Y-%m', 'now', '+7 hours') OR (note IS NOT NULL AND note NOT LIKE 'Lương%'))",
+  // Chỉ dữ liệu ghi trước khi tính năng ra mắt (28/10/2026 13:50 giờ VN = 1793170200000 ms), để chạy lại về sau
+  // không tự "nhận" giùm các khoản lương người dùng chưa bấm.
+  "UPDATE incomes SET received_at = created_at WHERE received_at IS NULL AND created_at < 1793170200000 AND (month < '2026-10' OR (note IS NOT NULL AND note NOT LIKE 'Lương%'))",
   // 2026-10: chuyển khoản chi sang trả sau mà vẫn giữ chuyến đi / nơi chốn.
   'ALTER TABLE credit_charges ADD COLUMN trip_id INTEGER',
   'ALTER TABLE credit_charges ADD COLUMN city TEXT',
